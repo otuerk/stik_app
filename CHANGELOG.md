@@ -5,6 +5,18 @@ All notable changes to Stik will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-02-23
+Appearance settings and zen mode polish
+
+### Added
+- **Font picker** — choose from 9 curated Google Fonts (3 sans-serif, 3 serif, 3 monospace) loaded lazily on first use; or import any local font (TTF/OTF/WOFF/WOFF2) from disk via file dialog. Persisted per-settings, applies instantly to all editor windows
+- **Window opacity** — background translucency slider (20–100%) in Settings > Appearance. Text stays crisp while the window fades, letting always-on-top notes reveal content underneath
+- **Highlight color token** — `==text==` highlight now uses a visible amber default instead of the previous near-invisible coral. Custom themes gain a "Highlight" color picker to override per-theme
+
+### Fixed
+- **Zen mode window dragging** — restored native window dragging for all window types (capture, sticked) in zen mode (#41)
+- **Zen mode button hit zones** — buttons in zen mode no longer intercept drag events, so dragging the window works anywhere on the header bar
+
 ## [0.7.0] - 2026-02-19
 Custom theming, settings UX hardening, and startup crash resilience
 
@@ -333,6 +345,7 @@ First release
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.7.1 | 2026-02-23 | Font picker (9 Google Fonts + local import), window opacity slider, amber highlight color, zen mode drag fix |
 | 0.7.0 | 2026-02-19 | Custom themes + import/export, autosave race fix, settings layout resize, startup crash hardening |
 | 0.6.6 | 2026-02-18 | Security patch: glib vulnerability fix |
 | 0.6.5 | 2026-02-18 | Inline images, RTL support, zen mode, hide tray icon, capture window size persistence |
@@ -353,6 +366,7 @@ First release
 | 0.2.0 | 2026-02-06 | Security hardening, performance index, architecture refactor |
 | 0.1.0 | 2026-02-05 | Initial release - core capture, search, manager |
 
+[0.7.1]: https://github.com/0xMassi/stik_app/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/0xMassi/stik_app/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/0xMassi/stik_app/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/0xMassi/stik_app/compare/v0.6.4...v0.6.5
