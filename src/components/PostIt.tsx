@@ -25,6 +25,7 @@ import {
 import { resolveCaptureFolder } from "@/utils/folderSelection";
 import { getFolderColor } from "@/utils/folderColors";
 import { formatShortcutDisplay } from "./ShortcutRecorder";
+import { loadGoogleFont, loadCustomFont } from "@/utils/fonts";
 
 
 interface PostItProps {
@@ -108,6 +109,9 @@ export default function PostIt({
   const [currentStickedId, setCurrentStickedId] = useState(stickedId);
   const [vimEnabled, setVimEnabled] = useState<boolean | null>(null); // null = loading
   const [fontSize, setFontSize] = useState(14);
+  const [fontFamily, setFontFamily] = useState<string | null>(null);
+  const [windowOpacity, setWindowOpacity] = useState(1.0);
+  const [customFonts, setCustomFonts] = useState<import("@/types").CustomFontEntry[]>([]);
   const [folderColors, setFolderColors] = useState<Record<string, string>>({});
   const [systemShortcuts, setSystemShortcuts] = useState<Record<string, string>>({});
   const [vimMode, setVimMode] = useState<VimMode>("normal");
@@ -133,6 +137,32 @@ export default function PostIt({
   useEffect(() => {
     invoke<string>("get_notes_directory").then(setNotesDir).catch(() => {});
   }, []);
+
+  // Apply font family: load from custom fonts or Google Fonts, then update the CSS var.
+  useEffect(() => {
+    if (!fontFamily) {
+      document.documentElement.style.setProperty("--editor-font-family", "inherit");
+      return;
+    }
+    const customEntry = customFonts.find((f) => f.name === fontFamily);
+    if (customEntry) {
+      // Custom local font — load async, apply once ready
+      loadCustomFont(customEntry.name, customEntry.path).then((ok) => {
+        if (ok) {
+          document.documentElement.style.setProperty(
+            "--editor-font-family",
+            `"${fontFamily}", sans-serif`
+          );
+        }
+      });
+    } else {
+      loadGoogleFont(fontFamily);
+      document.documentElement.style.setProperty(
+        "--editor-font-family",
+        `"${fontFamily}", sans-serif`
+      );
+    }
+  }, [fontFamily, customFonts]);
 
   const resolveFolderForAction = useCallback(async (): Promise<string> => {
     const folders = await invoke<string[]>("list_folders");
@@ -174,6 +204,9 @@ export default function PostIt({
       .then((s) => {
         setVimEnabled(s.vim_mode_enabled);
         setFontSize(s.font_size ?? 14);
+        setFontFamily(s.font_family ?? null);
+        setWindowOpacity(s.window_opacity ?? 1.0);
+        setCustomFonts(s.custom_fonts ?? []);
         setFolderColors(s.folder_colors ?? {});
         setSystemShortcuts(s.system_shortcuts ?? {});
         setCustomTemplates(s.custom_templates ?? []);
@@ -187,6 +220,9 @@ export default function PostIt({
     const unlisten = listen<StikSettings>("settings-changed", (event) => {
       setVimEnabled(event.payload.vim_mode_enabled);
       setFontSize(event.payload.font_size ?? 14);
+      setFontFamily(event.payload.font_family ?? null);
+      setWindowOpacity(event.payload.window_opacity ?? 1.0);
+      setCustomFonts(event.payload.custom_fonts ?? []);
       setFolderColors(event.payload.folder_colors ?? {});
       setSystemShortcuts(event.payload.system_shortcuts ?? {});
       setCustomTemplates(event.payload.custom_templates ?? []);
@@ -603,6 +639,7 @@ export default function PostIt({
 
   const hasMeaningfulContent = !isMarkdownEffectivelyEmpty(content);
   const hasValidFolder = folder.trim().length > 0;
+  const isCaptureZenMode = !isSticked && zenMode; // kept for folder picker; use zenMode directly for show/hide
 
   // Pin from capture mode
   const handlePin = useCallback(async () => {
@@ -1160,9 +1197,10 @@ export default function PostIt({
   return (
     <>
       <div
-        className={`w-full h-full bg-bg rounded-[14px] overflow-hidden flex flex-col ${
+        className={`w-full h-full rounded-[14px] overflow-hidden flex flex-col ${
           isSticked && isPinned ? "sticked-note" : ""
         } ${zenMode ? "zen-mode" : ""}`}
+        style={{ backgroundColor: `rgb(var(--color-bg) / ${windowOpacity})` }}
       >
       {/* Header - draggable */}
       <div
@@ -1171,200 +1209,204 @@ export default function PostIt({
           isSticked && isPinned ? "sticked-header" : ""
         }`}
       >
-        <div className="flex items-center gap-2">
-          {/* Pin button */}
-          {!isSticked ? (
-            // Capture mode: pin to create sticked note
-            <button
-              data-capture-hide
-              onClick={handlePin}
-              disabled={!hasMeaningfulContent || isPinning}
-              className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                hasMeaningfulContent
-                  ? "hover:bg-coral-light text-coral hover:text-coral"
-                  : "text-stone/50 cursor-not-allowed"
-              }`}
-              title="Pin to screen"
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="12" y1="17" x2="12" y2="22" />
-                <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-              </svg>
-            </button>
-          ) : (
-            // Sticked mode: toggle pin state
-            <button
-              data-capture-hide
-              onClick={handleTogglePin}
-              className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                isPinned
-                  ? "text-coral hover:bg-coral-light"
-                  : "text-stone hover:bg-line hover:text-coral"
-              }`}
-              title={isPinned ? "Unpin (won't restore on restart)" : "Pin (will restore on restart)"}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill={isPinned ? "currentColor" : "none"}
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="12" y1="17" x2="12" y2="22" />
-                <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-              </svg>
-            </button>
-          )}
-
-          <button
-            onClick={() => setShowPicker(!showPicker)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-pill text-[11px] font-semibold transition-colors hover:opacity-80 ${
-              hasValidFolder
-                ? `${getFolderColor(folder, folderColors).badgeBg} ${getFolderColor(folder, folderColors).badgeText}`
-                : "bg-line text-stone"
-            }`}
-          >
-            <span className="text-[8px]" style={{ color: getFolderColor(folder, folderColors).dot }}>●</span>
-            <span>{folder || "Stik"}</span>
-            <span className="text-[8px] opacity-50">▼</span>
-          </button>
-
-          {suggestedFolder && (
-            <button
-              data-capture-hide
-              onClick={() => {
-                onFolderChange(suggestedFolder);
-                setSuggestedFolder(null);
-              }}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-pill text-[10px] font-medium bg-coral/10 text-coral hover:bg-coral/20 transition-colors"
-            >
-              <span>→</span>
-              <span>{suggestedFolder}?</span>
-            </button>
-          )}
-        </div>
-
-        <div data-capture-hide className="flex items-center gap-3 text-[10px] text-stone">
-          <div className="relative" ref={copyMenuRef}>
-            {!(isCopying && copyMode === "image") && (
-            <button
-              onClick={() => setIsCopyMenuOpen((open) => !open)}
-              className={`p-1 rounded-md transition-colors ${
-                isCopyMenuOpen
-                  ? "text-coral bg-coral-light"
-                  : "text-stone hover:bg-line hover:text-ink"
-              }`}
-              title="Actions"
-            >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="7" cy="3" r="1.2" fill="currentColor" />
-                <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-                <circle cx="7" cy="11" r="1.2" fill="currentColor" />
-              </svg>
-            </button>
-            )}
-
-            {isCopyMenuOpen && (
-              <div className="absolute top-full right-0 mt-1 w-40 rounded-lg border border-line bg-bg shadow-stik overflow-hidden z-[240]">
+        {!zenMode && (
+          <>
+            <div className="flex items-center gap-2">
+              {/* Pin button */}
+              {!isSticked ? (
+                // Capture mode: pin to create sticked note
                 <button
-                  onClick={() => void handleCopy("rich")}
-                  className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                  data-capture-hide
+                  onClick={handlePin}
+                  disabled={!hasMeaningfulContent || isPinning}
+                  className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                    hasMeaningfulContent
+                      ? "hover:bg-coral-light text-coral hover:text-coral"
+                      : "text-stone/50 cursor-not-allowed"
+                  }`}
+                  title="Pin to screen"
                 >
-                  Copy as rich text
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="12" y1="17" x2="12" y2="22" />
+                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                  </svg>
                 </button>
+              ) : (
+                // Sticked mode: toggle pin state
                 <button
-                  onClick={() => void handleCopy("markdown")}
-                  className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                  data-capture-hide
+                  onClick={handleTogglePin}
+                  className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                    isPinned
+                      ? "text-coral hover:bg-coral-light"
+                      : "text-stone hover:bg-line hover:text-coral"
+                  }`}
+                  title={isPinned ? "Unpin (won't restore on restart)" : "Pin (will restore on restart)"}
                 >
-                  Copy as markdown
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill={isPinned ? "currentColor" : "none"}
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="12" y1="17" x2="12" y2="22" />
+                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                  </svg>
                 </button>
-                <button
-                  onClick={() => void handleCopy("image")}
-                  className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                >
-                  Copy as image
-                </button>
-                <div className="border-t border-line" />
-                <button
-                  onClick={async () => {
-                    setIsCopyMenuOpen(false);
-                    try {
-                      await invoke("show_apple_notes_picker_cmd");
-                    } catch (err) {
-                      console.error("Failed to open Apple Notes picker:", err);
-                    }
-                  }}
-                  className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                >
-                  Import from Apple Notes
-                </button>
-              </div>
-            )}
-          </div>
+              )}
 
-          <AiMenu
-            content={content}
-            folder={folder}
-            onApplyText={(text) => {
-              editorRef.current?.setContent(text);
-              setContent(text);
-            }}
-            onShowToast={(msg) => setToast(msg)}
-            disabled={!hasMeaningfulContent}
-          />
-
-          {isSticked && isPinned ? (
-            <div className="flex items-center gap-1.5">
               <button
-                onClick={handleCloseWithoutSaving}
-                className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
-                title="Close without saving"
-              >
-                Close
-              </button>
-              <button
-                onClick={handleSaveAndCloseSticked}
-                disabled={!hasMeaningfulContent}
-                className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
-                  hasMeaningfulContent
-                    ? "bg-coral text-white hover:bg-coral/90"
-                    : "bg-line text-stone cursor-not-allowed"
+                onClick={() => setShowPicker(!showPicker)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-pill text-[11px] font-semibold transition-colors hover:opacity-80 ${
+                  hasValidFolder
+                    ? `${getFolderColor(folder, folderColors).badgeBg} ${getFolderColor(folder, folderColors).badgeText}`
+                    : "bg-line text-stone"
                 }`}
-                title={hasMeaningfulContent ? "Save to folder and close" : "Nothing to save"}
               >
-                Save
+                <span className="text-[8px]" style={{ color: getFolderColor(folder, folderColors).dot }}>●</span>
+                <span>{folder || "Stik"}</span>
+                <span className="text-[8px] opacity-50">▼</span>
               </button>
+
+              {suggestedFolder && (
+                <button
+                  data-capture-hide
+                  onClick={() => {
+                    onFolderChange(suggestedFolder);
+                    setSuggestedFolder(null);
+                  }}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-pill text-[10px] font-medium bg-coral/10 text-coral hover:bg-coral/20 transition-colors"
+                >
+                  <span>→</span>
+                  <span>{suggestedFolder}?</span>
+                </button>
+              )}
             </div>
-          ) : isSticked ? (
-            <button
-              onClick={handleSaveAndCloseSticked}
-              className="px-2.5 py-1.5 bg-coral-light text-coral rounded-lg text-[10px] font-semibold hover:bg-coral hover:text-white transition-colors cursor-pointer"
-              title="Save and close (Esc)"
-            >
-              esc
-            </button>
-          ) : (
-            <button
-              onClick={handleSaveAndClose}
-              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors bg-coral-light text-coral hover:bg-coral hover:text-white cursor-pointer"
-              title="Save and close (Esc)"
-            >
-              esc
-            </button>
-          )}
-        </div>
+
+            <div data-capture-hide className="flex items-center gap-3 text-[10px] text-stone">
+              <div className="relative" ref={copyMenuRef}>
+                {!(isCopying && copyMode === "image") && (
+                <button
+                  onClick={() => setIsCopyMenuOpen((open) => !open)}
+                  className={`p-1 rounded-md transition-colors ${
+                    isCopyMenuOpen
+                      ? "text-coral bg-coral-light"
+                      : "text-stone hover:bg-line hover:text-ink"
+                  }`}
+                  title="Actions"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="7" cy="3" r="1.2" fill="currentColor" />
+                    <circle cx="7" cy="7" r="1.2" fill="currentColor" />
+                    <circle cx="7" cy="11" r="1.2" fill="currentColor" />
+                  </svg>
+                </button>
+                )}
+
+                {isCopyMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 w-40 rounded-lg border border-line bg-bg shadow-stik overflow-hidden z-[240]">
+                    <button
+                      onClick={() => void handleCopy("rich")}
+                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                    >
+                      Copy as rich text
+                    </button>
+                    <button
+                      onClick={() => void handleCopy("markdown")}
+                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                    >
+                      Copy as markdown
+                    </button>
+                    <button
+                      onClick={() => void handleCopy("image")}
+                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                    >
+                      Copy as image
+                    </button>
+                    <div className="border-t border-line" />
+                    <button
+                      onClick={async () => {
+                        setIsCopyMenuOpen(false);
+                        try {
+                          await invoke("show_apple_notes_picker_cmd");
+                        } catch (err) {
+                          console.error("Failed to open Apple Notes picker:", err);
+                        }
+                      }}
+                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                    >
+                      Import from Apple Notes
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <AiMenu
+                content={content}
+                folder={folder}
+                onApplyText={(text) => {
+                  editorRef.current?.setContent(text);
+                  setContent(text);
+                }}
+                onShowToast={(msg) => setToast(msg)}
+                disabled={!hasMeaningfulContent}
+              />
+
+              {isSticked && isPinned ? (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={handleCloseWithoutSaving}
+                    className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
+                    title="Close without saving"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={handleSaveAndCloseSticked}
+                    disabled={!hasMeaningfulContent}
+                    className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
+                      hasMeaningfulContent
+                        ? "bg-coral text-white hover:bg-coral/90"
+                        : "bg-line text-stone cursor-not-allowed"
+                    }`}
+                    title={hasMeaningfulContent ? "Save to folder and close" : "Nothing to save"}
+                  >
+                    Save
+                  </button>
+                </div>
+              ) : isSticked ? (
+                <button
+                  onClick={handleSaveAndCloseSticked}
+                  className="px-2.5 py-1.5 bg-coral-light text-coral rounded-lg text-[10px] font-semibold hover:bg-coral hover:text-white transition-colors cursor-pointer"
+                  title="Save and close (Esc)"
+                >
+                  esc
+                </button>
+              ) : (
+                <button
+                  onClick={handleSaveAndClose}
+                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors bg-coral-light text-coral hover:bg-coral hover:text-white cursor-pointer"
+                  title="Save and close (Esc)"
+                >
+                  esc
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Editor */}
@@ -1384,7 +1426,7 @@ export default function PostIt({
             placeholder={isSticked ? "Sticked note..." : "Type a thought..."}
             initialContent={resolvedInitialContent || initialContent}
             vimEnabled={vimEnabled}
-            showFormatToolbar={formatToolbar}
+            showFormatToolbar={zenMode ? false : formatToolbar}
             textDirection={textDirection}
             onVimModeChange={setVimMode}
             onVimSaveAndClose={runVimSaveAndClose}
@@ -1396,7 +1438,7 @@ export default function PostIt({
         )}
 
         {/* Folder Picker */}
-        {showPicker && (
+        {showPicker && !zenMode && (
           <FolderPicker
             query={content.startsWith("/") ? content.slice(1) : ""}
             onSelect={handleFolderSelect}
@@ -1410,119 +1452,122 @@ export default function PostIt({
       </div>
 
       {/* Footer - draggable (or command bar when vim command mode) */}
-      {vimEnabled && vimMode === "command" ? (
-        <div data-capture-hide className="flex flex-col border-t border-line">
-          {/* entire vim command bar hidden during capture */}
-          {vimCommandError && (
-            <div className="px-4 py-1 text-[11px] text-coral bg-coral-light/30">
-              {vimCommandError}
-            </div>
-          )}
-          <div className="flex items-center px-4 py-1.5 bg-ink/5">
-            <span className="text-[13px] font-mono text-coral font-bold mr-0.5">:</span>
-            <input
-              ref={commandInputRef}
-              type="text"
-              value={vimCommand}
-              onChange={(e) => {
-                setVimCommand(e.target.value);
-                setVimCommandError("");
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  executeVimCommand(vimCommand);
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  dismissCommandBar();
-                } else if (e.key === "Backspace" && !vimCommand) {
-                  e.preventDefault();
-                  dismissCommandBar();
-                }
-              }}
-              className="flex-1 bg-transparent text-[13px] font-mono text-ink outline-none placeholder:text-stone/50"
-              placeholder="wq  q!"
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </div>
-        </div>
-      ) : (
-        <div
-          onMouseDown={startDrag}
-          className="flex items-center justify-between px-4 py-2 border-t border-line text-[10px] drag-handle"
-        >
-          <span className="font-mono text-stone">
-            <span className="text-coral">~</span>/Stik/
-            {folder && <><span className="text-coral">{folder}</span>/</>}
-          </span>
-          <div className="flex items-center gap-2">
-            {vimEnabled ? (
-              <span className="vim-mode-indicator text-stone">
-                {vimMode === "normal" ? (
-                  <span className="text-coral">-- NORMAL --</span>
-                ) : vimMode === "visual" ? (
-                  <span className="text-amber-500">-- VISUAL --</span>
-                ) : vimMode === "visual-line" ? (
-                  <span className="text-amber-500">-- VISUAL LINE --</span>
-                ) : (
-                  <span className="text-green-600">-- INSERT --</span>
-                )}
-              </span>
-            ) : isSticked && !isPinned && !isViewing ? (
-              <span className="text-stone">
-                <span className="text-amber-500">○</span> unpinned
-              </span>
-            ) : (
-              <span className="text-stone">
-                <span className="text-coral">✦</span> markdown supported
-              </span>
+      {/* Vim command bar always renders when active (even in zen mode) */}
+      {(!zenMode || (vimEnabled && vimMode === "command")) && (
+        vimEnabled && vimMode === "command" ? (
+          <div data-capture-hide className="flex flex-col border-t border-line">
+            {/* entire vim command bar hidden during capture */}
+            {vimCommandError && (
+              <div className="px-4 py-1 text-[11px] text-coral bg-coral-light/30">
+                {vimCommandError}
+              </div>
             )}
-            {(onOpenSettings || isSticked) && (<span data-capture-hide className="contents">
-              {!vimEnabled && (
-              <button
-                onClick={() => {
-                  const next = !formatToolbar;
-                  setFormatToolbar(next);
-                  try { localStorage.setItem("stik:format-toolbar", next ? "1" : "0"); } catch {}
+            <div className="flex items-center px-4 py-1.5 bg-ink/5">
+              <span className="text-[13px] font-mono text-coral font-bold mr-0.5">:</span>
+              <input
+                ref={commandInputRef}
+                type="text"
+                value={vimCommand}
+                onChange={(e) => {
+                  setVimCommand(e.target.value);
+                  setVimCommandError("");
                 }}
-                className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                  formatToolbar
-                    ? "text-coral hover:bg-coral-light"
-                    : "text-stone hover:bg-line hover:text-ink"
-                }`}
-                title={formatToolbar ? "Hide format buttons" : "Show format buttons"}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 7V4h16v3" />
-                  <path d="M9 20h6" />
-                  <path d="M12 4v16" />
-                </svg>
-              </button>
-              )}
-              <button
-                onClick={() => invoke("open_command_palette")}
-                className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                title={`Command Palette (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8"/>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                </svg>
-              </button>
-              <button
-                onClick={() => isSticked ? invoke("open_settings") : onOpenSettings?.()}
-                className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                title={`Settings (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3"/>
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                </svg>
-              </button>
-            </span>)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    executeVimCommand(vimCommand);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    dismissCommandBar();
+                  } else if (e.key === "Backspace" && !vimCommand) {
+                    e.preventDefault();
+                    dismissCommandBar();
+                  }
+                }}
+                className="flex-1 bg-transparent text-[13px] font-mono text-ink outline-none placeholder:text-stone/50"
+                placeholder="wq  q!"
+                spellCheck={false}
+                autoComplete="off"
+              />
+            </div>
           </div>
-        </div>
+        ) : (
+          <div
+            onMouseDown={startDrag}
+            className="flex items-center justify-between px-4 py-2 border-t border-line text-[10px] drag-handle"
+          >
+            <span className="font-mono text-stone">
+              <span className="text-coral">~</span>/Stik/
+              {folder && <><span className="text-coral">{folder}</span>/</>}
+            </span>
+            <div className="flex items-center gap-2">
+              {vimEnabled ? (
+                <span className="vim-mode-indicator text-stone">
+                  {vimMode === "normal" ? (
+                    <span className="text-coral">-- NORMAL --</span>
+                  ) : vimMode === "visual" ? (
+                    <span className="text-amber-500">-- VISUAL --</span>
+                  ) : vimMode === "visual-line" ? (
+                    <span className="text-amber-500">-- VISUAL LINE --</span>
+                  ) : (
+                    <span className="text-green-600">-- INSERT --</span>
+                  )}
+                </span>
+              ) : isSticked && !isPinned && !isViewing ? (
+                <span className="text-stone">
+                  <span className="text-amber-500">○</span> unpinned
+                </span>
+              ) : (
+                <span className="text-stone">
+                  <span className="text-coral">✦</span> markdown supported
+                </span>
+              )}
+              {(onOpenSettings || isSticked) && (<span data-capture-hide className="contents">
+                {!vimEnabled && (
+                <button
+                  onClick={() => {
+                    const next = !formatToolbar;
+                    setFormatToolbar(next);
+                    try { localStorage.setItem("stik:format-toolbar", next ? "1" : "0"); } catch {}
+                  }}
+                  className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                    formatToolbar
+                      ? "text-coral hover:bg-coral-light"
+                      : "text-stone hover:bg-line hover:text-ink"
+                  }`}
+                  title={formatToolbar ? "Hide format buttons" : "Show format buttons"}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 7V4h16v3" />
+                    <path d="M9 20h6" />
+                    <path d="M12 4v16" />
+                  </svg>
+                </button>
+                )}
+                <button
+                  onClick={() => invoke("open_command_palette")}
+                  className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
+                  title={`Command Palette (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                </button>
+                <button
+                  onClick={() => isSticked ? invoke("open_settings") : onOpenSettings?.()}
+                  className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
+                  title={`Settings (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                  </svg>
+                </button>
+              </span>)}
+            </div>
+          </div>
+        )
       )}
     </div>
     {toast && <Toast message={toast} onDone={() => setToast(null)} />}
