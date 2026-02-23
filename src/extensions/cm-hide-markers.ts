@@ -2,8 +2,9 @@
  * Live preview — Obsidian/Zettlr-style markdown marker hiding.
  *
  * Uses Decoration.replace({}) to hide syntax markers (**, *, ~~, ==, `, #, >)
- * when the cursor is not inside the formatted node. Reveals raw markers when
- * the cursor enters or touches the node boundary.
+ * always except when the cursor is directly on the marker characters themselves.
+ * This prevents the "bouncing" effect where moving the cursor through a heading
+ * or link causes the raw syntax to flash in and out.
  *
  * Pattern from Zettlr (12.5k stars) and SilverBullet (4.7k stars):
  *   1. Iterate syntax tree within view.visibleRanges (viewport only)
@@ -45,36 +46,46 @@ function buildDecorations(view: EditorView): DecorationSet {
 
           case "StrongEmphasis":
           case "Emphasis": {
-            if (rangeInSelection(selection, node.from, node.to)) return;
+            // Reveal only the marker the cursor is directly on, not the whole node.
+            // This stops ** bouncing when the cursor moves through formatted text.
             for (const mark of node.node.getChildren("EmphasisMark")) {
-              ranges.push(hiddenDeco.range(mark.from, mark.to));
+              if (!rangeInSelection(selection, mark.from, mark.to)) {
+                ranges.push(hiddenDeco.range(mark.from, mark.to));
+              }
             }
             break;
           }
 
           case "Strikethrough": {
-            if (rangeInSelection(selection, node.from, node.to)) return;
             for (const mark of node.node.getChildren("StrikethroughMark")) {
-              ranges.push(hiddenDeco.range(mark.from, mark.to));
+              if (!rangeInSelection(selection, mark.from, mark.to)) {
+                ranges.push(hiddenDeco.range(mark.from, mark.to));
+              }
             }
             break;
           }
 
           case "InlineCode": {
-            if (rangeInSelection(selection, node.from, node.to)) return;
             for (const mark of node.node.getChildren("CodeMark")) {
-              ranges.push(hiddenDeco.range(mark.from, mark.to));
+              if (!rangeInSelection(selection, mark.from, mark.to)) {
+                ranges.push(hiddenDeco.range(mark.from, mark.to));
+              }
             }
             break;
           }
 
           case "Link": {
-            if (rangeInSelection(selection, node.from, node.to)) return;
+            // Reveal brackets/parens only when cursor is directly on them,
+            // and URL only when cursor is inside the URL itself.
             for (const mark of node.node.getChildren("LinkMark")) {
-              ranges.push(hiddenDeco.range(mark.from, mark.to));
+              if (!rangeInSelection(selection, mark.from, mark.to)) {
+                ranges.push(hiddenDeco.range(mark.from, mark.to));
+              }
             }
             for (const url of node.node.getChildren("URL")) {
-              ranges.push(hiddenDeco.range(url.from, url.to));
+              if (!rangeInSelection(selection, url.from, url.to)) {
+                ranges.push(hiddenDeco.range(url.from, url.to));
+              }
             }
             break;
           }
@@ -86,20 +97,20 @@ function buildDecorations(view: EditorView): DecorationSet {
 
           // Custom ==highlight== extension
           case "Highlight": {
-            if (rangeInSelection(selection, node.from, node.to)) return;
             for (const mark of node.node.getChildren("HighlightMark")) {
-              ranges.push(hiddenDeco.range(mark.from, mark.to));
+              if (!rangeInSelection(selection, mark.from, mark.to)) {
+                ranges.push(hiddenDeco.range(mark.from, mark.to));
+              }
             }
             break;
           }
 
           // ── Block markers ──────────────────────────────────────────
 
-          // Heading: # ## ### — check against parent heading node
+          // Heading: # ## ### — only reveal when cursor is on the # itself.
           case "HeaderMark": {
-            const parent = node.node.parent;
-            if (!parent) break;
-            if (rangeInSelection(selection, parent.from, parent.to)) break;
+            if (!node.node.parent) break;
+            if (rangeInSelection(selection, node.from, node.to)) break;
             // Include trailing space after # in the hidden range
             let end = node.to;
             if (end < doc.length && doc.sliceString(end, end + 1) === " ") {
@@ -109,16 +120,9 @@ function buildDecorations(view: EditorView): DecorationSet {
             break;
           }
 
-          // Blockquote: > — walk to highest Blockquote ancestor
+          // Blockquote: > — only reveal when cursor is on the > itself.
           case "QuoteMark": {
-            let highest = node.node.parent;
-            let walk = highest;
-            while (walk) {
-              if (walk.name === "Blockquote") highest = walk;
-              walk = walk.parent;
-            }
-            if (!highest || highest.name !== "Blockquote") break;
-            if (rangeInSelection(selection, highest.from, highest.to)) break;
+            if (rangeInSelection(selection, node.from, node.to)) break;
             // Hide > and optional trailing space
             const slice = doc.sliceString(node.from, node.from + 2);
             const match = /^>[ ]?/.exec(slice);
