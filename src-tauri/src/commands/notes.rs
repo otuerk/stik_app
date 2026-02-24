@@ -227,10 +227,18 @@ pub fn update_note(
 ) -> Result<NoteSaved, String> {
     let stik_folder = get_stik_folder()?;
     let note_path = PathBuf::from(&path);
+    let in_stik_folder = note_path.starts_with(&stik_folder);
 
-    // Validate path is within Stik folder
-    if !note_path.starts_with(&stik_folder) {
-        return Err("Invalid path: note must be within Stik folder".to_string());
+    // For viewing notes opened from Finder, allow saving external markdown files too.
+    if !in_stik_folder {
+        let is_markdown = note_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
+        if !is_markdown {
+            return Err("Invalid path: only markdown files can be edited outside Stik folder".to_string());
+        }
     }
 
     // Check file exists
@@ -238,8 +246,8 @@ pub fn update_note(
         return Err("Note file does not exist".to_string());
     }
 
-    // Don't save empty notes - delete instead
-    if is_effectively_empty_markdown(&content) {
+    // In Stik-managed notes, empty content deletes the note.
+    if in_stik_folder && is_effectively_empty_markdown(&content) {
         fs::remove_file(&note_path).map_err(|e| format!("Failed to delete note: {}", e))?;
         index.remove(&path);
         emb_index.remove_entry(&path);
@@ -269,13 +277,15 @@ pub fn update_note(
     let word_count = content.split_whitespace().count();
     analytics::track("note_updated", serde_json::json!({ "word_count": word_count }));
 
-    // Re-index with updated content
-    index.add(&path, &folder);
-    git_share::notify_note_changed(&folder);
-    if super::settings::load_settings_from_file().map(|s| s.ai_features_enabled).unwrap_or(false) {
-        if let Some(emb) = embeddings::embed_content(&content) {
-            emb_index.add_entry(&path, emb);
-            let _ = emb_index.save();
+    if in_stik_folder {
+        // Re-index with updated content
+        index.add(&path, &folder);
+        git_share::notify_note_changed(&folder);
+        if super::settings::load_settings_from_file().map(|s| s.ai_features_enabled).unwrap_or(false) {
+            if let Some(emb) = embeddings::embed_content(&content) {
+                emb_index.add_entry(&path, emb);
+                let _ = emb_index.save();
+            }
         }
     }
 
