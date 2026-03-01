@@ -45,6 +45,17 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown Document",
+        "mimeType": "text/markdown",
+        "role": "Editor"
+      }
+    ],
     "createUpdaterArtifacts": "v1Compatible",
     "externalBin": [
       "binaries/darwinkit"

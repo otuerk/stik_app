@@ -15,9 +15,52 @@ use commands::{
 };
 use shortcuts::shortcut_to_string;
 use state::AppState;
-use tauri::{Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 use windows::{show_command_palette, show_postit_with_folder, show_settings};
+
+fn folder_for_opened_note(path: &std::path::Path, stik_root: &std::path::Path) -> String {
+    if let Ok(relative) = path.strip_prefix(stik_root) {
+        let mut components = relative.components();
+        if let (Some(first), Some(_second)) = (components.next(), components.next()) {
+            return first.as_os_str().to_string_lossy().to_string();
+        }
+    }
+    String::new()
+}
+
+fn handle_opened_files(app: &AppHandle, paths: Vec<std::path::PathBuf>) {
+    for path in paths {
+        let is_markdown = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
+        if !is_markdown {
+            continue;
+        }
+
+        let path_str = path.to_string_lossy().to_string();
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) => {
+                eprintln!("Failed to read opened markdown file {}: {}", path_str, err);
+                continue;
+            }
+        };
+
+        let folder = folders::get_stik_folder()
+            .map(|root| folder_for_opened_note(&path, &root))
+            .unwrap_or_default();
+
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(err) = windows::open_note_for_viewing(app_handle, content, folder, path_str).await {
+                eprintln!("Failed to open markdown file from Finder: {}", err);
+            }
+        });
+    }
+}
 
 fn main() {
     tauri::Builder::default()
@@ -237,9 +280,19 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            eprintln!("Fatal: Tauri application failed to start: {}", e);
+            eprintln!("Fatal: Tauri application failed to build: {}", e);
             std::process::exit(1);
+        })
+        .run(|app, event| {
+            if let RunEvent::Opened { urls } = event {
+                let paths = urls
+                    .into_iter()
+                    .filter(|url| url.scheme() == "file")
+                    .filter_map(|url| url.to_file_path().ok())
+                    .collect();
+                handle_opened_files(app, paths);
+            }
         });
 }
