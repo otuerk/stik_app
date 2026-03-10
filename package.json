@@ -1,6 +1,6 @@
 {
   "name": "stik",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "Instant thought capture. One shortcut, post-it appears, type, close.",
   "type": "module",
   "scripts": {
