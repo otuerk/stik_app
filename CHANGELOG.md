@@ -5,6 +5,26 @@ All notable changes to Stik will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-03-10
+Note locking, iCloud sync, and storage abstraction
+
+### Added
+- **Note locking** — encrypt notes with AES-256-GCM, protected by Touch ID or device password. Lock/unlock via `⌘L` in command palette. Configurable session timeout (5m, 15m, 30m, 1h, or until quit) and lock-on-sleep option
+- **Lock prompt modal** — Touch ID authentication UI with idle/authenticating/failed states when opening locked notes
+- **Lock indicators** — lock icon and filename-derived title shown for encrypted notes in command palette and note list
+- **Recovery key export** — export the encryption key as base64 from Settings > Privacy for backup purposes
+- **iCloud sync** — enable in Settings to store notes in iCloud Drive, synced across all devices via `NSFileCoordinator`-based coordinated file operations
+- **Note migration** — one-click migration of existing local notes to iCloud when first enabling sync
+- **Sync indicator** — cloud icon in the UI pulses when iCloud sync activity is detected
+- **Storage abstraction layer** — all file I/O routed through `StorageMode` (local, iCloud, or custom directory), transparent to the rest of the codebase
+- **DarwinKit Auth handler** — biometric / device-password authentication via `LAContext` over JSON-RPC
+- **DarwinKit Cloud handler** — 11 coordinated iCloud file operations (read, write, delete, move, copy, list, monitor) with async notification support
+
+### Fixed
+- **Window opening off-screen** — `⌘⇧S` no longer opens on a disconnected external monitor; falls back to centering on the primary display
+- **Keychain double-prompting** — switched from macOS Keychain to file-based key storage (`~/.stik/note-key`) with one-time Keychain migration to avoid duplicate auth dialogs
+- **Locked notes showing "Untitled"** — encrypted notes now derive a readable title from their filename slug instead of showing "Untitled"
+
 ## [0.7.5] - 2026-03-04
 Editor live preview polish
 
@@ -387,6 +407,11 @@ First release
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.7.6 | 2026-03-10 | Note locking (AES-256-GCM + Touch ID), iCloud sync, storage abstraction, window positioning fix |
+| 0.7.5 | 2026-03-04 | Fenced code block cursor jump fix, heading dropdown clip fix, smart Enter/Backspace in fenced code |
+| 0.7.4 | 2026-03-02 | Window position persistence, multi-monitor support, cursor position persistence |
+| 0.7.3 | 2026-03-01 | macOS Finder integration, smarter auto-updater, non-blocking file reads |
+| 0.7.2 | 2026-02-23 | Product Hunt launch notice |
 | 0.7.1 | 2026-02-23 | Font picker (9 Google Fonts + local import), window opacity slider, amber highlight color, zen mode drag fix |
 | 0.7.0 | 2026-02-19 | Custom themes + import/export, autosave race fix, settings layout resize, startup crash hardening |
 | 0.6.6 | 2026-02-18 | Security patch: glib vulnerability fix |
@@ -408,6 +433,11 @@ First release
 | 0.2.0 | 2026-02-06 | Security hardening, performance index, architecture refactor |
 | 0.1.0 | 2026-02-05 | Initial release - core capture, search, manager |
 
+[0.7.6]: https://github.com/0xMassi/stik_app/compare/v0.7.5...v0.7.6
+[0.7.5]: https://github.com/0xMassi/stik_app/compare/v0.7.4...v0.7.5
+[0.7.4]: https://github.com/0xMassi/stik_app/compare/v0.7.3...v0.7.4
+[0.7.3]: https://github.com/0xMassi/stik_app/compare/v0.7.2...v0.7.3
+[0.7.2]: https://github.com/0xMassi/stik_app/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/0xMassi/stik_app/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/0xMassi/stik_app/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/0xMassi/stik_app/compare/v0.6.5...v0.6.6
