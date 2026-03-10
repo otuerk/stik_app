@@ -60,6 +60,7 @@ pub struct DarwinKitStatus {
 static BRIDGE_SENDER: OnceLock<Sender<BridgeMessage>> = OnceLock::new();
 static BRIDGE_READY: OnceLock<Mutex<DarwinKitStatus>> = OnceLock::new();
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+static NOTIFICATION_HANDLER: OnceLock<Box<dyn Fn(String, Value) + Send + Sync>> = OnceLock::new();
 
 fn bridge_status() -> &'static Mutex<DarwinKitStatus> {
     BRIDGE_READY.get_or_init(|| {
@@ -136,6 +137,12 @@ pub fn start_bridge(app: tauri::AppHandle) {
 
 /// Send a JSON-RPC call and wait for the response (10s timeout).
 pub fn call(method: &str, params: Option<Value>) -> Result<Value, String> {
+    call_with_timeout(method, params, 10)
+}
+
+/// Send a JSON-RPC call with a custom timeout in seconds.
+/// Use longer timeouts for iCloud operations that may need to download evicted files.
+pub fn call_with_timeout(method: &str, params: Option<Value>, timeout_secs: u64) -> Result<Value, String> {
     let sender = BRIDGE_SENDER
         .get()
         .ok_or_else(|| "DarwinKit bridge not started".to_string())?;
@@ -153,8 +160,14 @@ pub fn call(method: &str, params: Option<Value>) -> Result<Value, String> {
         .map_err(|_| "DarwinKit bridge channel closed".to_string())?;
 
     reply_rx
-        .recv_timeout(Duration::from_secs(10))
-        .map_err(|_| "DarwinKit call timed out (10s)".to_string())?
+        .recv_timeout(Duration::from_secs(timeout_secs))
+        .map_err(|_| format!("DarwinKit call timed out ({}s)", timeout_secs))?
+}
+
+/// Register a callback for push notifications from DarwinKit (e.g., icloud.files_changed).
+/// Call once during setup. The callback receives (method, params).
+pub fn register_notification_handler(handler: impl Fn(String, Value) + Send + Sync + 'static) {
+    let _ = NOTIFICATION_HANDLER.set(Box::new(handler));
 }
 
 /// Non-blocking check whether the sidecar is running.
@@ -202,7 +215,7 @@ fn spawn_sidecar(path: &str) -> Result<(Child, ChildStdin, ChildStdout), String>
         .arg("serve")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if cfg!(debug_assertions) { Stdio::inherit() } else { Stdio::null() })
         .spawn()
         .map_err(|e| format!("spawn failed: {}", e))?;
 
@@ -246,29 +259,40 @@ fn run_session(mut stdin: ChildStdin, stdout: ChildStdout, rx: &Receiver<BridgeM
                     }
                 };
 
-                // Handle the "ready" notification (no id)
+                // Handle notifications (no id) — "ready" or push notifications
                 if response.id.is_none() {
-                    if response.method.as_deref() == Some("ready") {
-                        if let Some(params) = &response.params {
-                            let version = params
-                                .get("version")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            let capabilities = params
-                                .get("capabilities")
-                                .and_then(|v| v.as_array())
-                                .map(|arr| {
-                                    arr.iter()
-                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
+                    if let Some(method) = &response.method {
+                        match method.as_str() {
+                            "ready" => {
+                                if let Some(params) = &response.params {
+                                    let version = params
+                                        .get("version")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    let capabilities = params
+                                        .get("capabilities")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
 
-                            let mut status =
-                                bridge_status().lock().unwrap_or_else(|e| e.into_inner());
-                            status.ready = true;
-                            status.version = version;
-                            status.capabilities = capabilities;
+                                    let mut status =
+                                        bridge_status().lock().unwrap_or_else(|e| e.into_inner());
+                                    status.ready = true;
+                                    status.version = version;
+                                    status.capabilities = capabilities;
+                                }
+                            }
+                            _ => {
+                                // Push notification from DarwinKit (e.g., icloud.files_changed)
+                                if let Some(handler) = NOTIFICATION_HANDLER.get() {
+                                    let params = response.params.clone().unwrap_or(Value::Null);
+                                    handler(method.clone(), params);
+                                }
+                            }
                         }
                     }
                     continue;

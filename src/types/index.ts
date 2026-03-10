@@ -53,6 +53,30 @@ export interface CustomThemeDefinition {
   colors: ThemeColors;
 }
 
+export interface ICloudSettings {
+  enabled: boolean;
+  migrated: boolean;
+}
+
+export interface ICloudStatus {
+  available: boolean;
+  enabled: boolean;
+  migrated: boolean;
+  container_url: string;
+  storage_mode: string;
+}
+
+export interface MigrationResult {
+  files_copied: number;
+  errors: string[];
+}
+
+export interface NoteLockSettings {
+  enabled: boolean;
+  timeout_minutes: number;
+  lock_on_sleep: boolean;
+}
+
 export interface StikSettings {
   shortcut_mappings: ShortcutMapping[];
   default_folder: string;
@@ -75,9 +99,11 @@ export interface StikSettings {
   capture_window_size: [number, number] | null;
   active_theme: string;
   custom_themes: CustomThemeDefinition[];
-  font_family?: string | null;   // null = system default
-  window_opacity?: number;       // 0.2–1.0, default 1.0
+  font_family?: string | null; // null = system default
+  window_opacity?: number; // 0.2–1.0, default 1.0
   custom_fonts?: CustomFontEntry[];
+  icloud: ICloudSettings;
+  note_lock: NoteLockSettings;
 }
 
 export interface NoteInfo {
@@ -86,6 +112,7 @@ export interface NoteInfo {
   folder: string;
   content: string;
   created: string;
+  locked?: boolean;
 }
 
 export interface SearchResult {
@@ -95,6 +122,7 @@ export interface SearchResult {
   title: string;
   snippet: string;
   created: string;
+  locked?: boolean;
 }
 
 export interface SemanticResult {

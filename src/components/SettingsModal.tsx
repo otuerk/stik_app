@@ -375,6 +375,7 @@ export default function SettingsModal({ isOpen, onClose, isWindow = false }: Set
       onPrepareGitRepository={prepareGitRepository}
       onSyncGitNow={syncGitNow}
       onOpenGitRemote={openGitRemote}
+      onTabChange={setActiveTab}
     />
   );
 

@@ -69,6 +69,24 @@ impl Default for GitSharingSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ICloudSettings {
+    pub enabled: bool,
+    pub migrated: bool,
+}
+
+impl Default for ICloudSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            migrated: false,
+        }
+    }
+}
+
+pub use super::note_lock::NoteLockSettings;
+
 fn default_true() -> bool {
     true
 }
@@ -137,6 +155,10 @@ pub struct StikSettings {
     pub window_opacity: f64,
     #[serde(default)]
     pub custom_fonts: Vec<CustomFontEntry>,
+    #[serde(default)]
+    pub icloud: ICloudSettings,
+    #[serde(default)]
+    pub note_lock: NoteLockSettings,
 }
 
 impl Default for StikSettings {
@@ -189,6 +211,8 @@ impl Default for StikSettings {
             font_family: None,
             window_opacity: 1.0,
             custom_fonts: vec![],
+            icloud: ICloudSettings::default(),
+            note_lock: NoteLockSettings::default(),
         }
     }
 }
@@ -372,7 +396,10 @@ fn parse_color_value(color: &str) -> Option<String> {
     if parts.len() != 3 {
         return None;
     }
-    let parsed: Option<Vec<u8>> = parts.into_iter().map(|part| part.parse::<u8>().ok()).collect();
+    let parsed: Option<Vec<u8>> = parts
+        .into_iter()
+        .map(|part| part.parse::<u8>().ok())
+        .collect();
     parsed.map(|rgb| format!("{} {} {}", rgb[0], rgb[1], rgb[2]))
 }
 
@@ -482,12 +509,7 @@ pub fn export_theme_file(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_color_value,
-        normalize_loaded_settings,
-        ShortcutMapping,
-        StikSettings,
-    };
+    use super::{normalize_loaded_settings, parse_color_value, ShortcutMapping, StikSettings};
 
     #[test]
     fn normalization_reenables_all_disabled_shortcuts() {

@@ -64,15 +64,19 @@ pub fn show_postit_with_folder(app: &AppHandle, folder: &str) {
     if let Some(window) = app.get_webview_window("postit") {
         if let Ok(s) = settings::load_settings_from_file() {
             // Restore persisted capture window size
-            if let Some((w, h)) = s.capture_window_size {
+            let (w, h) = s.capture_window_size.unwrap_or((400.0, 280.0));
+            if s.capture_window_size.is_some() {
                 let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
             }
-            // Restore position from shared viewing geometry so capture and
-            // viewing windows always open at the same spot.
+            // Restore position only if it's visible on a connected monitor.
             if let Some((x, y)) = s.viewing_window_position {
-                let _ = window.set_position(tauri::Position::Physical(
-                    PhysicalPosition::new(x as i32, y as i32),
-                ));
+                if is_window_visible_on_any_monitor(app, x, y, w, h) {
+                    let _ = window.set_position(tauri::Position::Physical(
+                        PhysicalPosition::new(x as i32, y as i32),
+                    ));
+                } else {
+                    let _ = window.center();
+                }
             }
         }
         let _ = window.show();

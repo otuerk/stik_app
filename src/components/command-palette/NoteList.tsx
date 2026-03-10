@@ -1,6 +1,9 @@
 import type { SearchResult, SemanticResult } from "@/types";
 import { formatRelativeDate } from "@/utils/formatRelativeDate";
-import { normalizeNoteTitle, normalizeNoteSnippet } from "@/utils/notePresentation";
+import {
+  normalizeNoteTitle,
+  normalizeNoteSnippet,
+} from "@/utils/notePresentation";
 import { getFolderColor } from "@/utils/folderColors";
 
 interface NoteListProps {
@@ -34,7 +37,7 @@ function highlightSnippet(snippet: string, searchQuery: string) {
       </span>
     ) : (
       <span key={i}>{part}</span>
-    )
+    ),
   );
 }
 
@@ -112,7 +115,8 @@ export default function NoteList({
             />
           </div>
           <div className="mt-1 ml-6 text-[10px] text-stone">
-            in <span className="text-coral font-medium">{targetFolder}</span> — enter to create, esc to cancel
+            in <span className="text-coral font-medium">{targetFolder}</span> —
+            enter to create, esc to cancel
           </div>
         </div>
       )}
@@ -128,7 +132,7 @@ export default function NoteList({
 
       {results.map((result, index) => {
         const displayTitle = normalizeNoteTitle(
-          result.title || result.filename || "Untitled"
+          result.title || result.filename || "Untitled",
         );
         const displaySnippet = normalizeNoteSnippet(result.snippet);
         const shouldShowSnippet =
@@ -148,7 +152,27 @@ export default function NoteList({
             }`}
           >
             <div className="flex items-center gap-2">
-              <p className="flex-1 text-[14px] font-medium text-ink leading-relaxed truncate">
+              {result.locked && (
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 text-stone"
+                >
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+              )}
+              <p
+                className={`flex-1 text-[14px] font-medium leading-relaxed truncate ${
+                  result.locked ? "text-stone italic" : "text-ink"
+                }`}
+              >
                 {displayTitle}
               </p>
               <span
@@ -160,7 +184,7 @@ export default function NoteList({
             <span className="text-[10px] text-stone font-mono">
               {formatRelativeDate(result.created)}
             </span>
-            {shouldShowSnippet && (
+            {shouldShowSnippet && !result.locked && (
               <p className="text-[12px] text-stone leading-relaxed mt-0.5">
                 {highlightSnippet(displaySnippet, query)}
               </p>
@@ -180,7 +204,7 @@ export default function NoteList({
           {semanticResults.map((result, index) => {
             const globalIndex = results.length + index;
             const displayTitle = normalizeNoteTitle(
-              result.title || result.filename || "Untitled"
+              result.title || result.filename || "Untitled",
             );
             const displaySnippet = normalizeNoteSnippet(result.snippet);
             const shouldShowSnippet =

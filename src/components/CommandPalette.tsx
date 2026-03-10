@@ -9,11 +9,26 @@ import type {
   FolderStats,
   StikSettings,
 } from "@/types";
-import { extractNoteTitle, normalizeNoteSnippet } from "@/utils/notePresentation";
+import {
+  extractNoteTitle,
+  normalizeNoteSnippet,
+} from "@/utils/notePresentation";
 import ConfirmDialog from "./ConfirmDialog";
+import LockPrompt from "./LockPrompt";
 import FolderSidebar from "./command-palette/FolderSidebar";
 import NoteList from "./command-palette/NoteList";
 import MovePicker from "./command-palette/MovePicker";
+
+/** Derive a human-readable title from a Stik filename like `20260310-114522-my-note-a1b2.md` */
+function titleFromFilename(filename: string): string {
+  const stem = filename.replace(/\.md$/i, "");
+  const parts = stem.split("-");
+  // Skip YYYYMMDD, HHMMSS prefix and UUID suffix
+  if (parts.length > 3) {
+    return parts.slice(2, -1).join(" ");
+  }
+  return stem;
+}
 
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   const [isVisible, setIsVisible] = useState(false);
@@ -68,7 +83,9 @@ export default function CommandPalette() {
   const [newFolderColor, setNewFolderColor] = useState("coral");
   const [isRenamingFolder, setIsRenamingFolder] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [renamingFolderName, setRenamingFolderName] = useState<string | null>(null);
+  const [renamingFolderName, setRenamingFolderName] = useState<string | null>(
+    null,
+  );
 
   // New note creation
   const [isCreatingNote, setIsCreatingNote] = useState(false);
@@ -81,10 +98,15 @@ export default function CommandPalette() {
     folderName?: string;
   } | null>(null);
   const [showMoveModal, setShowMoveModal] = useState<SearchResult | null>(null);
+  const [lockPromptNote, setLockPromptNote] = useState<SearchResult | null>(
+    null,
+  );
   const [toast, setToast] = useState<string | null>(null);
 
   // Sidebar position (persisted in settings)
-  const [sidebarPosition, setSidebarPosition] = useState<"left" | "right">("left");
+  const [sidebarPosition, setSidebarPosition] = useState<"left" | "right">(
+    "left",
+  );
   const settingsRef = useRef<StikSettings | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -149,12 +171,15 @@ export default function CommandPalette() {
             path: n.path,
             filename: n.filename,
             folder: n.folder,
-            title: extractNoteTitle(n.content),
+            title: n.locked
+              ? titleFromFilename(n.filename)
+              : extractNoteTitle(n.content),
             snippet: normalizeNoteSnippet(n.content),
             created: n.created,
-          }))
+            locked: n.locked,
+          })),
         );
-      }
+      },
     );
   }, [selectedFolder]);
 
@@ -189,7 +214,7 @@ export default function CommandPalette() {
       if (semanticResult.status === "fulfilled") {
         const textPaths = new Set(textResults.map((r) => r.path));
         setSemanticResults(
-          semanticResult.value.filter((r) => !textPaths.has(r.path))
+          semanticResult.value.filter((r) => !textPaths.has(r.path)),
         );
       } else {
         setSemanticResults([]);
@@ -215,8 +240,7 @@ export default function CommandPalette() {
   // Scroll selected note into view
   useEffect(() => {
     if (resultsRef.current) {
-      const items =
-        resultsRef.current.querySelectorAll<HTMLElement>("button");
+      const items = resultsRef.current.querySelectorAll<HTMLElement>("button");
       if (items[selectedNoteIndex]) {
         items[selectedNoteIndex].scrollIntoView({ block: "nearest" });
       }
@@ -231,23 +255,41 @@ export default function CommandPalette() {
     }
   }, []);
 
-  const handleSelectResult = useCallback(
+  const openNote = useCallback(
     async (result: SearchResult) => {
       try {
-        const content = await invoke<string>("get_note_content", {
-          path: result.path,
-        });
+        const content = result.locked
+          ? await invoke<string>("read_locked_note", { path: result.path })
+          : await invoke<string>("get_note_content", { path: result.path });
         await invoke("open_note_for_viewing", {
           content,
           folder: result.folder,
           path: result.path,
         });
+        closePalette();
       } catch (error) {
         console.error("Failed to open note:", error);
       }
-      closePalette();
     },
-    [closePalette]
+    [closePalette],
+  );
+
+  const handleSelectResult = useCallback(
+    async (result: SearchResult) => {
+      if (result.locked) {
+        const authed = await invoke<boolean>("is_authenticated").catch(
+          () => false,
+        );
+        if (authed) {
+          await openNote(result);
+        } else {
+          setLockPromptNote(result);
+        }
+        return;
+      }
+      await openNote(result);
+    },
+    [openNote],
   );
 
   const refreshAfterChange = useCallback(async () => {
@@ -262,9 +304,12 @@ export default function CommandPalette() {
       path: n.path,
       filename: n.filename,
       folder: n.folder,
-      title: extractNoteTitle(n.content),
+      title: n.locked
+        ? titleFromFilename(n.filename)
+        : extractNoteTitle(n.content),
       snippet: normalizeNoteSnippet(n.content),
       created: n.created,
+      locked: n.locked,
     }));
     setRecentNotes(recent);
 
@@ -295,7 +340,7 @@ export default function CommandPalette() {
         setToast(String(error));
       }
     },
-    [refreshAfterChange]
+    [refreshAfterChange],
   );
 
   // Delete folder
@@ -317,7 +362,7 @@ export default function CommandPalette() {
         setToast(String(error));
       }
     },
-    [selectedFolder, refreshAfterChange]
+    [selectedFolder, refreshAfterChange],
   );
 
   // Move note
@@ -336,17 +381,21 @@ export default function CommandPalette() {
         setToast(String(error));
       }
     },
-    [refreshAfterChange]
+    [refreshAfterChange],
   );
 
   // Save settings helper — keeps settingsRef in sync and notifies other windows
-  const saveAndEmitSettings = useCallback(async (patch: Partial<StikSettings>) => {
-    const current = settingsRef.current ?? await invoke<StikSettings>("get_settings");
-    const updated = { ...current, ...patch };
-    settingsRef.current = updated;
-    await invoke("save_settings", { settings: updated });
-    await emit("settings-changed", updated);
-  }, []);
+  const saveAndEmitSettings = useCallback(
+    async (patch: Partial<StikSettings>) => {
+      const current =
+        settingsRef.current ?? (await invoke<StikSettings>("get_settings"));
+      const updated = { ...current, ...patch };
+      settingsRef.current = updated;
+      await invoke("save_settings", { settings: updated });
+      await emit("settings-changed", updated);
+    },
+    [],
+  );
 
   // Create folder
   const handleCreateFolder = useCallback(async () => {
@@ -358,7 +407,10 @@ export default function CommandPalette() {
     try {
       await invoke("create_folder", { name: newFolderName.trim() });
       if (newFolderColor !== "coral") {
-        const updatedColors = { ...folderColors, [newFolderName.trim()]: newFolderColor };
+        const updatedColors = {
+          ...folderColors,
+          [newFolderName.trim()]: newFolderColor,
+        };
         setFolderColors(updatedColors);
         await saveAndEmitSettings({ folder_colors: updatedColors });
       }
@@ -371,7 +423,13 @@ export default function CommandPalette() {
       console.error("Failed to create folder:", error);
       setToast(String(error));
     }
-  }, [newFolderName, newFolderColor, folderColors, refreshAfterChange, saveAndEmitSettings]);
+  }, [
+    newFolderName,
+    newFolderColor,
+    folderColors,
+    refreshAfterChange,
+    saveAndEmitSettings,
+  ]);
 
   // Rename folder
   const handleRenameFolder = useCallback(async () => {
@@ -416,7 +474,7 @@ export default function CommandPalette() {
         console.error("Failed to save folder color:", error);
       }
     },
-    [renamingFolderName, folderColors, saveAndEmitSettings]
+    [renamingFolderName, folderColors, saveAndEmitSettings],
   );
 
   // Create new note in selected folder
@@ -474,7 +532,7 @@ export default function CommandPalette() {
   // Keyboard handler
   useEffect(() => {
     // Skip keyboard when overlays are active (they handle their own keys)
-    if (confirmDelete || showMoveModal) return;
+    if (confirmDelete || showMoveModal || lockPromptNote) return;
     // Skip when inline editing (create/rename handle their own keys via stopPropagation)
     if (isCreatingFolder || isRenamingFolder || isCreatingNote) return;
 
@@ -547,6 +605,40 @@ export default function CommandPalette() {
           e.preventDefault();
           setIsCreatingNote(true);
           setNewNoteTitle("");
+        } else if (
+          e.key === "l" &&
+          (e.metaKey || e.ctrlKey) &&
+          totalItems > 0
+        ) {
+          e.preventDefault();
+          const note =
+            selectedNoteIndex < results.length
+              ? results[selectedNoteIndex]
+              : null;
+          if (note) {
+            const toggleLock = async () => {
+              try {
+                if (note.locked) {
+                  const authed = await invoke<boolean>(
+                    "is_authenticated",
+                  ).catch(() => false);
+                  if (!authed) {
+                    const ok = await invoke<boolean>("authenticate");
+                    if (!ok) return;
+                  }
+                  await invoke("unlock_note", { path: note.path });
+                  setToast("Note unlocked");
+                } else {
+                  await invoke("lock_note", { path: note.path });
+                  setToast("Note locked");
+                }
+                await refreshAfterChange();
+              } catch (err) {
+                setToast(String(err));
+              }
+            };
+            toggleLock();
+          }
         }
       } else {
         // Left pane (folder sidebar)
@@ -554,13 +646,11 @@ export default function CommandPalette() {
 
         if (e.key === "ArrowDown") {
           e.preventDefault();
-          setSelectedFolderIndex((i) =>
-            Math.min(i + 1, totalFolderItems - 1)
-          );
+          setSelectedFolderIndex((i) => Math.min(i + 1, totalFolderItems - 1));
           // Apply folder selection
           const newIdx = Math.min(
             selectedFolderIndex + 1,
-            totalFolderItems - 1
+            totalFolderItems - 1,
           );
           if (newIdx === 0) {
             setSelectedFolder(null);
@@ -581,10 +671,7 @@ export default function CommandPalette() {
           // Switch to right pane to browse notes in selected folder
           setFocusPane("right");
           setSelectedNoteIndex(0);
-        } else if (
-          e.key === "Backspace" &&
-          selectedFolder
-        ) {
+        } else if (e.key === "Backspace" && selectedFolder) {
           e.preventDefault();
           setConfirmDelete({ type: "folder", folderName: selectedFolder });
         } else if (e.key === "n" && (e.metaKey || e.ctrlKey)) {
@@ -617,10 +704,12 @@ export default function CommandPalette() {
     folderStats,
     confirmDelete,
     showMoveModal,
+    lockPromptNote,
     isCreatingFolder,
     isRenamingFolder,
     isCreatingNote,
     handleSelectResult,
+    refreshAfterChange,
     closePalette,
   ]);
 
@@ -691,7 +780,9 @@ export default function CommandPalette() {
       </div>
 
       {/* Two-pane layout */}
-      <div className={`flex-1 flex overflow-hidden min-h-0 ${sidebarPosition === "right" ? "flex-row-reverse" : ""}`}>
+      <div
+        className={`flex-1 flex overflow-hidden min-h-0 ${sidebarPosition === "right" ? "flex-row-reverse" : ""}`}
+      >
         <FolderSidebar
           folderStats={folderStats}
           totalNoteCount={totalNoteCount}
@@ -763,15 +854,11 @@ export default function CommandPalette() {
       >
         <div className="flex items-center gap-3">
           <span>
-            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
-              tab
-            </kbd>{" "}
+            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">tab</kbd>{" "}
             switch pane
           </span>
           <span>
-            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
-              ↑↓
-            </kbd>{" "}
+            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">↑↓</kbd>{" "}
             navigate
           </span>
           <span>
@@ -783,16 +870,16 @@ export default function CommandPalette() {
             delete
           </span>
           <span>
-            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
-              ⌘M
-            </kbd>{" "}
+            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘M</kbd>{" "}
             move
           </span>
           <span>
-            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">
-              ⌘N
-            </kbd>{" "}
+            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘N</kbd>{" "}
             new
+          </span>
+          <span>
+            <kbd className="px-1.5 py-0.5 bg-line rounded text-[9px]">⌘L</kbd>{" "}
+            lock
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -849,6 +936,17 @@ export default function CommandPalette() {
           folderColors={folderColors}
           onMove={(targetFolder) => handleMoveNote(showMoveModal, targetFolder)}
           onCancel={() => setShowMoveModal(null)}
+        />
+      )}
+
+      {lockPromptNote && (
+        <LockPrompt
+          onAuthenticated={() => {
+            const note = lockPromptNote;
+            setLockPromptNote(null);
+            openNote(note);
+          }}
+          onCancel={() => setLockPromptNote(null)}
         />
       )}
 

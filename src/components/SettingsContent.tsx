@@ -2,7 +2,15 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import ShortcutRecorder from "./ShortcutRecorder";
-import type { CustomFontEntry, CustomTemplate, CustomThemeDefinition, GitSyncStatus, ShortcutMapping, StikSettings, ThemeColors } from "@/types";
+import type {
+  CustomFontEntry,
+  CustomTemplate,
+  CustomThemeDefinition,
+  GitSyncStatus,
+  ShortcutMapping,
+  StikSettings,
+  ThemeColors,
+} from "@/types";
 import { BUILTIN_COMMAND_NAMES } from "@/extensions/cm-slash-commands";
 import ConfirmDialog from "./ConfirmDialog";
 import {
@@ -13,7 +21,12 @@ import {
 } from "@/utils/systemShortcuts";
 import { hexToRgb, rgbToHex } from "@/utils/color";
 import { BUILTIN_THEMES, generateThemeId, type BuiltinTheme } from "@/themes";
-import { FONTS, loadGoogleFont, loadCustomFont, fontNameFromPath } from "@/utils/fonts";
+import {
+  FONTS,
+  loadGoogleFont,
+  loadCustomFont,
+  fontNameFromPath,
+} from "@/utils/fonts";
 
 function remoteToWebUrl(remoteUrl: string): string | null {
   const trimmed = remoteUrl.trim();
@@ -40,7 +53,12 @@ interface DropdownProps {
   placeholder?: string;
 }
 
-export function Dropdown({ value, options, onChange, placeholder }: DropdownProps) {
+export function Dropdown({
+  value,
+  options,
+  onChange,
+  placeholder,
+}: DropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -52,7 +70,10 @@ export function Dropdown({ value, options, onChange, placeholder }: DropdownProp
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
         setIsOpen(false);
       }
     };
@@ -69,7 +90,9 @@ export function Dropdown({ value, options, onChange, placeholder }: DropdownProp
         <span className={selectedOption ? "text-ink" : "text-stone"}>
           {selectedOption?.label || placeholder || "Select..."}
         </span>
-        <span className={`text-[8px] text-stone transition-transform ${isOpen ? "rotate-180" : ""}`}>
+        <span
+          className={`text-[8px] text-stone transition-transform ${isOpen ? "rotate-180" : ""}`}
+        >
           ▼
         </span>
       </button>
@@ -98,7 +121,16 @@ export function Dropdown({ value, options, onChange, placeholder }: DropdownProp
   );
 }
 
-export type SettingsTab = "appearance" | "shortcuts" | "folders" | "editor" | "templates" | "git" | "ai" | "insights" | "privacy";
+export type SettingsTab =
+  | "appearance"
+  | "shortcuts"
+  | "folders"
+  | "editor"
+  | "templates"
+  | "git"
+  | "ai"
+  | "insights"
+  | "privacy";
 
 interface SettingsContentProps {
   activeTab: SettingsTab;
@@ -123,9 +155,16 @@ interface SettingsContentProps {
   onPrepareGitRepository: () => Promise<void>;
   onSyncGitNow: () => Promise<void>;
   onOpenGitRemote: () => Promise<void>;
+  onTabChange?: (tab: SettingsTab) => void;
 }
 
-function SettingsToast({ message, onDone }: { message: string; onDone: () => void }) {
+function SettingsToast({
+  message,
+  onDone,
+}: {
+  message: string;
+  onDone: () => void;
+}) {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -161,6 +200,8 @@ function PrivacySection({
 }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [authAvailable, setAuthAvailable] = useState(false);
+  const [isLockingAll, setIsLockingAll] = useState(false);
 
   const loadDeviceId = useCallback(async () => {
     try {
@@ -173,6 +214,9 @@ function PrivacySection({
 
   useEffect(() => {
     loadDeviceId();
+    invoke<boolean>("auth_available")
+      .then(setAuthAvailable)
+      .catch(() => {});
   }, [loadDeviceId]);
 
   const copyDeviceId = () => {
@@ -181,119 +225,312 @@ function PrivacySection({
     setToast("Device ID copied");
   };
 
+  const handleLockAllNow = async () => {
+    setIsLockingAll(true);
+    try {
+      await invoke("lock_session");
+      setToast("Session locked");
+    } catch (err) {
+      setToast(String(err));
+    } finally {
+      setIsLockingAll(false);
+    }
+  };
+
+  const handleExportRecoveryKey = async () => {
+    try {
+      const authed = await invoke<boolean>("is_authenticated").catch(
+        () => false,
+      );
+      if (!authed) {
+        const ok = await invoke<boolean>("authenticate");
+        if (!ok) return;
+      }
+      const key = await invoke<string>("export_recovery_key");
+      await navigator.clipboard.writeText(key);
+      setToast("Recovery key copied to clipboard");
+    } catch (err) {
+      setToast(String(err));
+    }
+  };
+
+  const noteLock = settings.note_lock ?? {
+    enabled: false,
+    timeout_minutes: 15,
+    lock_on_sleep: true,
+  };
+
   return (
     <>
-    <div className="space-y-4">
-      <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-        <div>
-          <p className="text-[13px] text-ink font-medium">Share anonymous usage data</p>
-          <p className="mt-1 text-[12px] text-stone leading-relaxed">
-            Help improve Stik by sharing anonymous usage statistics.
+      <div className="space-y-4">
+        {/* Note Locking */}
+        <div className="space-y-3">
+          <p className="text-[11px] font-semibold text-stone uppercase tracking-wider">
+            Note Locking
           </p>
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            onSettingsChange({
-              ...settings,
-              analytics_enabled: !settings.analytics_enabled,
-            })
-          }
-          className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-            settings.analytics_enabled ? "bg-coral" : "bg-line"
-          }`}
-          title="Toggle anonymous analytics"
-        >
-          <span
-            className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-              settings.analytics_enabled ? "translate-x-5" : "translate-x-0"
-            }`}
-          />
-        </button>
-      </label>
 
-      <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-        <div>
-          <p className="text-[13px] text-ink font-medium">Automatic updates</p>
-          <p className="mt-1 text-[12px] text-stone leading-relaxed">
-            Check for and install updates silently in the background.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() =>
-            onSettingsChange({
-              ...settings,
-              auto_update_enabled: !settings.auto_update_enabled,
-            })
-          }
-          className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-            settings.auto_update_enabled ? "bg-coral" : "bg-line"
-          }`}
-          title="Toggle automatic updates"
-        >
-          <span
-            className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-              settings.auto_update_enabled ? "translate-x-5" : "translate-x-0"
-            }`}
-          />
-        </button>
-      </label>
+          {!authAvailable && (
+            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+              <p className="text-[12px] text-stone leading-relaxed">
+                Touch ID or device password is required to use note locking. Set
+                up a password in System Settings.
+              </p>
+            </div>
+          )}
 
-      <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
-        <div>
-          <p className="text-[13px] text-ink font-medium mb-2">What we collect</p>
-          <ul className="text-[12px] text-stone leading-relaxed space-y-1">
-            <li>App opens (daily active usage)</li>
-            <li>Device type (macOS version, CPU architecture)</li>
-            <li>Screen resolution and app version</li>
-            <li>Anonymous device identifier</li>
-          </ul>
-        </div>
-        <div>
-          <p className="text-[13px] text-ink font-medium mb-2">What we NEVER collect</p>
-          <ul className="text-[12px] text-stone leading-relaxed space-y-1">
-            <li>Your notes, titles, or folder names</li>
-            <li>File paths or personal information</li>
-            <li>Anything that could identify you</li>
-          </ul>
-        </div>
-      </div>
-
-      {deviceId && (
-        <div className="p-4 bg-line/30 rounded-xl border border-line/50">
-          <p className="text-[12px] text-stone mb-2">Your device ID</p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 px-2.5 py-2 text-[11px] rounded-lg bg-bg border border-line text-ink font-mono truncate">
-              {deviceId}
-            </code>
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+            <div>
+              <p className="text-[13px] text-ink font-medium">
+                Enable note locking
+              </p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Lock individual notes with Touch ID or device password. Content
+                is encrypted with AES-256.
+              </p>
+            </div>
             <button
               type="button"
-              onClick={copyDeviceId}
-              className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors whitespace-nowrap"
+              disabled={!authAvailable}
+              onClick={() =>
+                onSettingsChange({
+                  ...settings,
+                  note_lock: { ...noteLock, enabled: !noteLock.enabled },
+                })
+              }
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                noteLock.enabled ? "bg-coral" : "bg-line"
+              } ${!authAvailable ? "opacity-50 cursor-not-allowed" : ""}`}
             >
-              Copy
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  noteLock.enabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
             </button>
-          </div>
-          <p className="mt-2 text-[11px] text-stone">
-            This random identifier is not linked to your identity.
+          </label>
+
+          {noteLock.enabled && (
+            <>
+              <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[13px] text-ink font-medium">
+                      Auto-lock timeout
+                    </p>
+                    <p className="text-[12px] text-stone">
+                      Re-authenticate after this period of inactivity.
+                    </p>
+                  </div>
+                  <div className="w-[140px]">
+                    <Dropdown
+                      value={String(noteLock.timeout_minutes)}
+                      options={[
+                        { value: "1", label: "1 minute" },
+                        { value: "5", label: "5 minutes" },
+                        { value: "15", label: "15 minutes" },
+                        { value: "30", label: "30 minutes" },
+                        { value: "60", label: "1 hour" },
+                      ]}
+                      onChange={(v) =>
+                        onSettingsChange({
+                          ...settings,
+                          note_lock: {
+                            ...noteLock,
+                            timeout_minutes: Number(v),
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[13px] text-ink font-medium">
+                      Lock on sleep
+                    </p>
+                    <p className="text-[12px] text-stone">
+                      Require authentication when your Mac wakes up.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onSettingsChange({
+                        ...settings,
+                        note_lock: {
+                          ...noteLock,
+                          lock_on_sleep: !noteLock.lock_on_sleep,
+                        },
+                      })
+                    }
+                    className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                      noteLock.lock_on_sleep ? "bg-coral" : "bg-line"
+                    }`}
+                  >
+                    <span
+                      className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                        noteLock.lock_on_sleep
+                          ? "translate-x-5"
+                          : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </label>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleLockAllNow}
+                  disabled={isLockingAll}
+                  className="flex-1 px-3 py-2.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
+                >
+                  {isLockingAll ? "Locking..." : "Lock session now"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportRecoveryKey}
+                  className="flex-1 px-3 py-2.5 text-[12px] text-stone border border-line rounded-lg hover:bg-line/50 transition-colors"
+                >
+                  Export recovery key
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Analytics */}
+        <div className="mt-2">
+          <p className="text-[11px] font-semibold text-stone uppercase tracking-wider mb-3">
+            Analytics
           </p>
         </div>
-      )}
 
-      <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
-        <p className="text-[12px] text-stone leading-relaxed">
-          Analytics are sent to PostHog using a write-only key. Stik is open-source — you
-          can verify exactly what is collected in the source code.
-        </p>
+        <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+          <div>
+            <p className="text-[13px] text-ink font-medium">
+              Share anonymous usage data
+            </p>
+            <p className="mt-1 text-[12px] text-stone leading-relaxed">
+              Help improve Stik by sharing anonymous usage statistics.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              onSettingsChange({
+                ...settings,
+                analytics_enabled: !settings.analytics_enabled,
+              })
+            }
+            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+              settings.analytics_enabled ? "bg-coral" : "bg-line"
+            }`}
+            title="Toggle anonymous analytics"
+          >
+            <span
+              className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                settings.analytics_enabled ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </label>
+
+        <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+          <div>
+            <p className="text-[13px] text-ink font-medium">
+              Automatic updates
+            </p>
+            <p className="mt-1 text-[12px] text-stone leading-relaxed">
+              Check for and install updates silently in the background.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              onSettingsChange({
+                ...settings,
+                auto_update_enabled: !settings.auto_update_enabled,
+              })
+            }
+            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+              settings.auto_update_enabled ? "bg-coral" : "bg-line"
+            }`}
+            title="Toggle automatic updates"
+          >
+            <span
+              className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                settings.auto_update_enabled ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </label>
+
+        <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
+          <div>
+            <p className="text-[13px] text-ink font-medium mb-2">
+              What we collect
+            </p>
+            <ul className="text-[12px] text-stone leading-relaxed space-y-1">
+              <li>App opens (daily active usage)</li>
+              <li>Device type (macOS version, CPU architecture)</li>
+              <li>Screen resolution and app version</li>
+              <li>Anonymous device identifier</li>
+            </ul>
+          </div>
+          <div>
+            <p className="text-[13px] text-ink font-medium mb-2">
+              What we NEVER collect
+            </p>
+            <ul className="text-[12px] text-stone leading-relaxed space-y-1">
+              <li>Your notes, titles, or folder names</li>
+              <li>File paths or personal information</li>
+              <li>Anything that could identify you</li>
+            </ul>
+          </div>
+        </div>
+
+        {deviceId && (
+          <div className="p-4 bg-line/30 rounded-xl border border-line/50">
+            <p className="text-[12px] text-stone mb-2">Your device ID</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 px-2.5 py-2 text-[11px] rounded-lg bg-bg border border-line text-ink font-mono truncate">
+                {deviceId}
+              </code>
+              <button
+                type="button"
+                onClick={copyDeviceId}
+                className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors whitespace-nowrap"
+              >
+                Copy
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] text-stone">
+              This random identifier is not linked to your identity.
+            </p>
+          </div>
+        )}
+
+        <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+          <p className="text-[12px] text-stone leading-relaxed">
+            Analytics are sent to PostHog using a write-only key. Stik is
+            open-source — you can verify exactly what is collected in the source
+            code.
+          </p>
+        </div>
       </div>
-    </div>
-    {toast && <SettingsToast message={toast} onDone={() => setToast(null)} />}
+      {toast && <SettingsToast message={toast} onDone={() => setToast(null)} />}
     </>
   );
 }
 
-const COLOR_TOKEN_LABELS: { key: keyof ThemeColors; label: string; optional?: boolean; default?: string }[] = [
+const COLOR_TOKEN_LABELS: {
+  key: keyof ThemeColors;
+  label: string;
+  optional?: boolean;
+  default?: string;
+}[] = [
   { key: "bg", label: "Background" },
   { key: "surface", label: "Surface" },
   { key: "ink", label: "Text" },
@@ -302,7 +539,12 @@ const COLOR_TOKEN_LABELS: { key: keyof ThemeColors; label: string; optional?: bo
   { key: "accent", label: "Accent" },
   { key: "accent_light", label: "Accent light" },
   { key: "accent_dark", label: "Accent dark" },
-  { key: "highlight", label: "Highlight", optional: true, default: "253 224 71" },
+  {
+    key: "highlight",
+    label: "Highlight",
+    optional: true,
+    default: "253 224 71",
+  },
 ];
 
 function ThemePreviewCard({
@@ -364,10 +606,14 @@ function ThemePreviewCard({
           {name}
         </span>
         {isSystem && (
-          <span className="text-[9px] text-stone uppercase tracking-wider">Auto</span>
+          <span className="text-[9px] text-stone uppercase tracking-wider">
+            Auto
+          </span>
         )}
         {isDark && !isSystem && (
-          <span className="text-[9px] text-stone uppercase tracking-wider">Dark</span>
+          <span className="text-[9px] text-stone uppercase tracking-wider">
+            Dark
+          </span>
         )}
       </div>
     </button>
@@ -437,32 +683,36 @@ function CustomThemeEditor({
       <div>
         <p className="text-[12px] text-stone mb-2">Colors</p>
         <div className="grid grid-cols-2 gap-2">
-          {COLOR_TOKEN_LABELS.map(({ key, label, optional, default: defaultRgb }) => {
-            const rgbValue = theme.colors[key] ?? defaultRgb ?? "0 0 0";
-            return (
-              <div
-                key={key}
-                className="flex items-center gap-2 px-2.5 py-2 bg-bg rounded-lg border border-line/50"
-              >
-                <label className="relative w-6 h-6 shrink-0">
-                  <input
-                    type="color"
-                    value={rgbToHex(rgbValue)}
-                    onChange={(e) => updateColor(key, e.target.value)}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  />
-                  <div
-                    className="w-6 h-6 rounded-md border border-line cursor-pointer"
-                    style={{ backgroundColor: `rgb(${rgbValue})` }}
-                  />
-                </label>
-                <span className="text-[11px] text-ink truncate">
-                  {label}
-                  {optional && <span className="ml-1 text-stone/60">opt</span>}
-                </span>
-              </div>
-            );
-          })}
+          {COLOR_TOKEN_LABELS.map(
+            ({ key, label, optional, default: defaultRgb }) => {
+              const rgbValue = theme.colors[key] ?? defaultRgb ?? "0 0 0";
+              return (
+                <div
+                  key={key}
+                  className="flex items-center gap-2 px-2.5 py-2 bg-bg rounded-lg border border-line/50"
+                >
+                  <label className="relative w-6 h-6 shrink-0">
+                    <input
+                      type="color"
+                      value={rgbToHex(rgbValue)}
+                      onChange={(e) => updateColor(key, e.target.value)}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    <div
+                      className="w-6 h-6 rounded-md border border-line cursor-pointer"
+                      style={{ backgroundColor: `rgb(${rgbValue})` }}
+                    />
+                  </label>
+                  <span className="text-[11px] text-ink truncate">
+                    {label}
+                    {optional && (
+                      <span className="ml-1 text-stone/60">opt</span>
+                    )}
+                  </span>
+                </div>
+              );
+            },
+          )}
         </div>
       </div>
 
@@ -553,7 +803,8 @@ function AppearanceSection({
   settings: StikSettings;
   onSettingsChange: (settings: StikSettings) => void;
 }) {
-  const [editingTheme, setEditingTheme] = useState<CustomThemeDefinition | null>(null);
+  const [editingTheme, setEditingTheme] =
+    useState<CustomThemeDefinition | null>(null);
   const [isNewTheme, setIsNewTheme] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
@@ -576,7 +827,9 @@ function AppearanceSection({
     const selected = await open({
       multiple: false,
       title: "Import font file",
-      filters: [{ name: "Font files", extensions: ["ttf", "otf", "woff", "woff2"] }],
+      filters: [
+        { name: "Font files", extensions: ["ttf", "otf", "woff", "woff2"] },
+      ],
     });
     if (!selected) return;
 
@@ -652,7 +905,11 @@ function AppearanceSection({
       theme_mode: editingTheme.id,
     });
     setEditingTheme(null);
-    setToast(isNewTheme ? `Theme "${editingTheme.name}" created` : `Theme "${editingTheme.name}" updated`);
+    setToast(
+      isNewTheme
+        ? `Theme "${editingTheme.name}" created`
+        : `Theme "${editingTheme.name}" updated`,
+    );
   };
 
   const deleteTheme = (id: string) => {
@@ -675,16 +932,17 @@ function AppearanceSection({
     const selected = await open({
       multiple: false,
       title: "Import theme file",
-      filters: [
-        { name: "Theme files", extensions: ["json", "toml"] },
-      ],
+      filters: [{ name: "Theme files", extensions: ["json", "toml"] }],
     });
     if (!selected) return;
 
     try {
-      const imported = await invoke<CustomThemeDefinition>("import_theme_file", {
-        path: selected,
-      });
+      const imported = await invoke<CustomThemeDefinition>(
+        "import_theme_file",
+        {
+          path: selected,
+        },
+      );
       const updated = [...customThemes, imported];
       onSettingsChange({
         ...settings,
@@ -698,7 +956,11 @@ function AppearanceSection({
     }
   };
 
-  const handleExport = async (theme: { name: string; is_dark: boolean; colors: ThemeColors }) => {
+  const handleExport = async (theme: {
+    name: string;
+    is_dark: boolean;
+    colors: ThemeColors;
+  }) => {
     const selected = await save({
       title: "Export theme",
       defaultPath: `${theme.name.toLowerCase().replace(/\s+/g, "-")}.json`,
@@ -722,7 +984,9 @@ function AppearanceSection({
     }
   };
 
-  const systemColors: BuiltinTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
+  const systemColors: BuiltinTheme = window.matchMedia(
+    "(prefers-color-scheme: dark)",
+  ).matches
     ? BUILTIN_THEMES[1]
     : BUILTIN_THEMES[0];
 
@@ -771,7 +1035,16 @@ function AppearanceSection({
                   className="w-5 h-5 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-ink text-[10px]"
                   title="Edit theme"
                 >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                   </svg>
                 </button>
@@ -784,7 +1057,16 @@ function AppearanceSection({
                   className="w-5 h-5 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-ink text-[10px]"
                   title="Export theme"
                 >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="17 8 12 3 7 8" />
                     <line x1="12" y1="3" x2="12" y2="15" />
@@ -799,7 +1081,16 @@ function AppearanceSection({
                   className="w-5 h-5 flex items-center justify-center rounded bg-bg/80 backdrop-blur-sm text-stone hover:text-coral text-[10px]"
                   title="Delete theme"
                 >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    width="10"
+                    height="10"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M3 6h18" />
                     <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
                     <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
@@ -838,7 +1129,16 @@ function AppearanceSection({
               onClick={handleImport}
               className="px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
@@ -857,7 +1157,16 @@ function AppearanceSection({
               onClick={handleImportFont}
               className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-coral border border-dashed border-coral/30 hover:bg-coral-light transition-colors"
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
@@ -869,7 +1178,9 @@ function AppearanceSection({
           <div className="flex flex-wrap gap-1.5 mb-2">
             <button
               type="button"
-              onClick={() => onSettingsChange({ ...settings, font_family: null })}
+              onClick={() =>
+                onSettingsChange({ ...settings, font_family: null })
+              }
               className={`px-3 py-1.5 rounded-full text-[11px] font-medium border transition-colors ${
                 selectedFont === null
                   ? "bg-coral text-white border-coral"
@@ -883,7 +1194,11 @@ function AppearanceSection({
           {(["sans", "serif", "mono"] as const).map((cat) => (
             <div key={cat} className="mb-2">
               <p className="text-[10px] text-stone uppercase tracking-wider mb-1.5">
-                {cat === "sans" ? "Sans-serif" : cat === "serif" ? "Serif" : "Monospace"}
+                {cat === "sans"
+                  ? "Sans-serif"
+                  : cat === "serif"
+                    ? "Serif"
+                    : "Monospace"}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {FONTS.filter((f) => f.category === cat).map((font) => (
@@ -910,7 +1225,9 @@ function AppearanceSection({
 
           {customFonts.length > 0 && (
             <div className="mb-1">
-              <p className="text-[10px] text-stone uppercase tracking-wider mb-1.5">Custom</p>
+              <p className="text-[10px] text-stone uppercase tracking-wider mb-1.5">
+                Custom
+              </p>
               <div className="flex flex-wrap gap-1.5">
                 {customFonts.map((cf) => (
                   <div key={cf.path} className="flex items-center gap-0.5">
@@ -918,8 +1235,15 @@ function AppearanceSection({
                       type="button"
                       onClick={() => {
                         void loadCustomFont(cf.name, cf.path).then((ok) => {
-                          if (ok) onSettingsChange({ ...settings, font_family: cf.name });
-                          else setToast(`Could not load "${cf.name}" — file may have moved`);
+                          if (ok)
+                            onSettingsChange({
+                              ...settings,
+                              font_family: cf.name,
+                            });
+                          else
+                            setToast(
+                              `Could not load "${cf.name}" — file may have moved`,
+                            );
                         });
                       }}
                       style={{ fontFamily: `"${cf.name}", sans-serif` }}
@@ -953,7 +1277,9 @@ function AppearanceSection({
         {/* ── Background Opacity ── */}
         <div className="p-4 bg-line/30 rounded-xl border border-line/50">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-[13px] text-ink font-medium">Background Opacity</p>
+            <p className="text-[13px] text-ink font-medium">
+              Background Opacity
+            </p>
             <span className="text-[12px] font-mono text-stone tabular-nums">
               {Math.round(windowOpacity * 100)}%
             </span>
@@ -965,19 +1291,24 @@ function AppearanceSection({
             step={5}
             value={Math.round(windowOpacity * 100)}
             onChange={(e) =>
-              onSettingsChange({ ...settings, window_opacity: Number(e.target.value) / 100 })
+              onSettingsChange({
+                ...settings,
+                window_opacity: Number(e.target.value) / 100,
+              })
             }
             className="w-full accent-coral"
           />
           <p className="mt-2 text-[11px] text-stone leading-relaxed">
-            Makes the note window translucent. Text stays sharp — only the background fades.
+            Makes the note window translucent. Text stays sharp — only the
+            background fades.
           </p>
         </div>
 
         <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
           <p className="text-[12px] text-stone leading-relaxed">
-            Themes control all colors across Stik — the editor, command palette, settings, and sticky notes.
-            System mode automatically follows your macOS appearance.
+            Themes control all colors across Stik — the editor, command palette,
+            settings, and sticky notes. System mode automatically follows your
+            macOS appearance.
           </p>
         </div>
       </div>
@@ -1005,12 +1336,17 @@ function validateTemplateName(
   existingNames: string[],
   editingIndex: number | null,
 ): string | null {
-  if (name.length < TEMPLATE_NAME_MIN) return `Name must be at least ${TEMPLATE_NAME_MIN} characters`;
-  if (name.length > TEMPLATE_NAME_MAX) return `Name must be at most ${TEMPLATE_NAME_MAX} characters`;
-  if (!TEMPLATE_NAME_RE.test(name)) return "Lowercase letters, numbers, and hyphens only (must start with a letter)";
-  if (BUILTIN_COMMAND_NAMES.includes(name)) return `"${name}" is a built-in command`;
+  if (name.length < TEMPLATE_NAME_MIN)
+    return `Name must be at least ${TEMPLATE_NAME_MIN} characters`;
+  if (name.length > TEMPLATE_NAME_MAX)
+    return `Name must be at most ${TEMPLATE_NAME_MAX} characters`;
+  if (!TEMPLATE_NAME_RE.test(name))
+    return "Lowercase letters, numbers, and hyphens only (must start with a letter)";
+  if (BUILTIN_COMMAND_NAMES.includes(name))
+    return `"${name}" is a built-in command`;
   const dupeIdx = existingNames.findIndex((n) => n === name);
-  if (dupeIdx >= 0 && dupeIdx !== editingIndex) return "A template with this name already exists";
+  if (dupeIdx >= 0 && dupeIdx !== editingIndex)
+    return "A template with this name already exists";
   return null;
 }
 
@@ -1061,7 +1397,11 @@ function TemplatesSection({
     const trimmedBody = editBody.trim();
 
     const existingNames = templates.map((t) => t.name);
-    const nErr = validateTemplateName(trimmedName, existingNames, editingIndex === -1 ? null : editingIndex);
+    const nErr = validateTemplateName(
+      trimmedName,
+      existingNames,
+      editingIndex === -1 ? null : editingIndex,
+    );
     const bErr = !trimmedBody
       ? "Body cannot be empty"
       : trimmedBody.length > TEMPLATE_BODY_MAX
@@ -1082,7 +1422,11 @@ function TemplatesSection({
       onChange(updated);
     }
     cancelEdit();
-    setToast(isNew ? `Template /${trimmedName} added` : `Template /${trimmedName} updated`);
+    setToast(
+      isNew
+        ? `Template /${trimmedName} added`
+        : `Template /${trimmedName} updated`,
+    );
   };
 
   const confirmDelete = (index: number) => {
@@ -1095,156 +1439,186 @@ function TemplatesSection({
 
   return (
     <>
-    <div className="space-y-4">
-      <p className="text-[12px] text-stone">
-        Create reusable note templates accessible via <span className="text-ink font-medium">/command</span> in the editor.
-      </p>
-
-      {/* Existing templates */}
-      {templates.length > 0 && (
-        <div className="space-y-2">
-          {templates.map((t, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-2 px-3 py-2.5 bg-line/30 rounded-xl border border-line/50"
-            >
-              <div className="flex-1 min-w-0">
-                <p className="text-[13px] text-ink font-medium">/{t.name}</p>
-                <p className="text-[11px] text-stone truncate">
-                  {t.body.split("\n")[0].slice(0, 60)}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => startEdit(i)}
-                className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                title="Edit template"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(i)}
-                className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
-                title="Delete template"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 6h18" />
-                  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                </svg>
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Edit / Add form */}
-      {editingIndex !== null ? (
-        <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
-          <div>
-            <p className="text-[12px] text-stone mb-1.5">Command name</p>
-            <div className="flex items-center gap-2">
-              <span className="text-[13px] text-stone">/</span>
-              <input
-                ref={nameInputRef}
-                type="text"
-                value={editName}
-                onChange={(e) => {
-                  setEditName(e.target.value);
-                  setNameError(null);
-                }}
-                placeholder="my-template"
-                maxLength={TEMPLATE_NAME_MAX}
-                className="flex-1 px-3 py-2 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
-              />
-            </div>
-            {nameError && (
-              <p className="mt-1 text-[11px] text-coral">{nameError}</p>
-            )}
-          </div>
-
-          <div>
-            <p className="text-[12px] text-stone mb-1.5">Template body</p>
-            <textarea
-              value={editBody}
-              onChange={(e) => {
-                setEditBody(e.target.value);
-                setBodyError(null);
-              }}
-              placeholder={"# My Template\n\nContent here...\n\n{{cursor}}"}
-              rows={6}
-              maxLength={TEMPLATE_BODY_MAX}
-              className="w-full px-3 py-2 bg-bg border border-line rounded-lg text-[13px] text-ink font-mono placeholder:text-stone/70 focus:outline-none focus:border-coral/50 resize-y"
-            />
-            {bodyError && (
-              <p className="mt-1 text-[11px] text-coral">{bodyError}</p>
-            )}
-          </div>
-
-          <div className="p-2.5 bg-bg/50 rounded-lg border border-line/50">
-            <p className="text-[11px] text-stone mb-1 font-medium">Placeholders</p>
-            <div className="flex flex-wrap gap-1.5">
-              {["{{date}}", "{{time}}", "{{day}}", "{{datetime}}", "{{isodate}}", "{{cursor}}"].map((ph) => (
-                <code
-                  key={ph}
-                  className="px-1.5 py-0.5 text-[10px] rounded bg-line/50 text-ink font-mono"
-                >
-                  {ph}
-                </code>
-              ))}
-            </div>
-            <p className="mt-1.5 text-[10px] text-stone">
-              <span className="text-ink">{"{{cursor}}"}</span> sets where the cursor lands after insertion.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="button"
-              onClick={saveEdit}
-              className="px-3 py-2 text-[12px] font-medium text-white bg-coral rounded-lg hover:bg-coral/90 transition-colors"
-            >
-              {editingIndex === -1 ? "Add" : "Save"}
-            </button>
-            <button
-              type="button"
-              onClick={cancelEdit}
-              className="px-3 py-2 text-[12px] text-stone hover:text-ink rounded-lg hover:bg-line transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={startAdd}
-          className="w-full px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
-        >
-          <span className="text-lg">+</span>
-          <span>Add template</span>
-        </button>
-      )}
-
-      <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
-        <p className="text-[12px] text-stone leading-relaxed">
-          Type <span className="text-ink font-medium">/</span> at the start of a line in the editor to see all templates.
-          Custom templates appear with a "Custom" badge.
+      <div className="space-y-4">
+        <p className="text-[12px] text-stone">
+          Create reusable note templates accessible via{" "}
+          <span className="text-ink font-medium">/command</span> in the editor.
         </p>
+
+        {/* Existing templates */}
+        {templates.length > 0 && (
+          <div className="space-y-2">
+            {templates.map((t, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-2 px-3 py-2.5 bg-line/30 rounded-xl border border-line/50"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] text-ink font-medium">/{t.name}</p>
+                  <p className="text-[11px] text-stone truncate">
+                    {t.body.split("\n")[0].slice(0, 60)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => startEdit(i)}
+                  className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
+                  title="Edit template"
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(i)}
+                  className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
+                  title="Delete template"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Edit / Add form */}
+        {editingIndex !== null ? (
+          <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-3">
+            <div>
+              <p className="text-[12px] text-stone mb-1.5">Command name</p>
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] text-stone">/</span>
+                <input
+                  ref={nameInputRef}
+                  type="text"
+                  value={editName}
+                  onChange={(e) => {
+                    setEditName(e.target.value);
+                    setNameError(null);
+                  }}
+                  placeholder="my-template"
+                  maxLength={TEMPLATE_NAME_MAX}
+                  className="flex-1 px-3 py-2 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
+                />
+              </div>
+              {nameError && (
+                <p className="mt-1 text-[11px] text-coral">{nameError}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[12px] text-stone mb-1.5">Template body</p>
+              <textarea
+                value={editBody}
+                onChange={(e) => {
+                  setEditBody(e.target.value);
+                  setBodyError(null);
+                }}
+                placeholder={"# My Template\n\nContent here...\n\n{{cursor}}"}
+                rows={6}
+                maxLength={TEMPLATE_BODY_MAX}
+                className="w-full px-3 py-2 bg-bg border border-line rounded-lg text-[13px] text-ink font-mono placeholder:text-stone/70 focus:outline-none focus:border-coral/50 resize-y"
+              />
+              {bodyError && (
+                <p className="mt-1 text-[11px] text-coral">{bodyError}</p>
+              )}
+            </div>
+
+            <div className="p-2.5 bg-bg/50 rounded-lg border border-line/50">
+              <p className="text-[11px] text-stone mb-1 font-medium">
+                Placeholders
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  "{{date}}",
+                  "{{time}}",
+                  "{{day}}",
+                  "{{datetime}}",
+                  "{{isodate}}",
+                  "{{cursor}}",
+                ].map((ph) => (
+                  <code
+                    key={ph}
+                    className="px-1.5 py-0.5 text-[10px] rounded bg-line/50 text-ink font-mono"
+                  >
+                    {ph}
+                  </code>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[10px] text-stone">
+                <span className="text-ink">{"{{cursor}}"}</span> sets where the
+                cursor lands after insertion.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={saveEdit}
+                className="px-3 py-2 text-[12px] font-medium text-white bg-coral rounded-lg hover:bg-coral/90 transition-colors"
+              >
+                {editingIndex === -1 ? "Add" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={cancelEdit}
+                className="px-3 py-2 text-[12px] text-stone hover:text-ink rounded-lg hover:bg-line transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={startAdd}
+            className="w-full px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
+          >
+            <span className="text-lg">+</span>
+            <span>Add template</span>
+          </button>
+        )}
+
+        <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+          <p className="text-[12px] text-stone leading-relaxed">
+            Type <span className="text-ink font-medium">/</span> at the start of
+            a line in the editor to see all templates. Custom templates appear
+            with a "Custom" badge.
+          </p>
+        </div>
       </div>
-    </div>
-    {confirmingDelete !== null && (
-      <ConfirmDialog
-        title="Delete template?"
-        description={`This will remove /${templates[confirmingDelete]?.name} from your slash commands.`}
-        onConfirm={() => confirmDelete(confirmingDelete)}
-        onCancel={() => setConfirmingDelete(null)}
-      />
-    )}
-    {toast && <SettingsToast message={toast} onDone={() => setToast(null)} />}
+      {confirmingDelete !== null && (
+        <ConfirmDialog
+          title="Delete template?"
+          description={`This will remove /${templates[confirmingDelete]?.name} from your slash commands.`}
+          onConfirm={() => confirmDelete(confirmingDelete)}
+          onCancel={() => setConfirmingDelete(null)}
+        />
+      )}
+      {toast && <SettingsToast message={toast} onDone={() => setToast(null)} />}
     </>
   );
 }
@@ -1272,7 +1646,9 @@ export default function SettingsContent({
   onPrepareGitRepository,
   onSyncGitNow,
   onOpenGitRemote,
+  onTabChange,
 }: SettingsContentProps) {
+  const [showGitAdvanced, setShowGitAdvanced] = useState(false);
   const remoteWebUrl = remoteToWebUrl(settings.git_sharing.remote_url);
   const notesDir = settings.notes_directory
     ? `${settings.notes_directory}/Stik`
@@ -1289,7 +1665,9 @@ export default function SettingsContent({
   };
 
   const removeMapping = (index: number) => {
-    const newMappings = settings.shortcut_mappings.filter((_, i) => i !== index);
+    const newMappings = settings.shortcut_mappings.filter(
+      (_, i) => i !== index,
+    );
     onSettingsChange({ ...settings, shortcut_mappings: newMappings });
   };
 
@@ -1302,7 +1680,10 @@ export default function SettingsContent({
     const letters = "ABCDEFGHIJKLNOQRTUVWXYZ".split("");
     for (const letter of letters) {
       const shortcut = `Cmd+Shift+${letter}`;
-      if (!usedShortcuts.includes(shortcut) && !systemShortcutValues.includes(shortcut)) {
+      if (
+        !usedShortcuts.includes(shortcut) &&
+        !systemShortcutValues.includes(shortcut)
+      ) {
         defaultShortcut = shortcut;
         break;
       }
@@ -1312,7 +1693,11 @@ export default function SettingsContent({
       ...settings,
       shortcut_mappings: [
         ...settings.shortcut_mappings,
-        { shortcut: defaultShortcut, folder: folders[0] || "Inbox", enabled: true },
+        {
+          shortcut: defaultShortcut,
+          folder: folders[0] || "Inbox",
+          enabled: true,
+        },
       ],
     });
   };
@@ -1335,167 +1720,252 @@ export default function SettingsContent({
 
   return (
     <div>
-        {activeTab === "appearance" && (
-          <AppearanceSection settings={settings} onSettingsChange={onSettingsChange} />
-        )}
+      {activeTab === "appearance" && (
+        <AppearanceSection
+          settings={settings}
+          onSettingsChange={onSettingsChange}
+        />
+      )}
 
-        {activeTab === "shortcuts" && (
-          <div>
-            <p className="mb-4 text-[12px] text-stone">
-              Configure global shortcuts that instantly open capture in a chosen folder.
-            </p>
+      {activeTab === "shortcuts" && (
+        <div>
+          <p className="mb-4 text-[12px] text-stone">
+            Configure global shortcuts that instantly open capture in a chosen
+            folder.
+          </p>
 
-            <div className="space-y-2">
-              {settings.shortcut_mappings.map((mapping, index) => (
-                <div
-                  key={index}
-                  className="flex items-center gap-2 px-3 py-2 bg-line/30 rounded-xl border border-line/50"
-                >
-                  <div className="flex-1 min-w-0">
-                    <ShortcutRecorder
-                      value={mapping.shortcut}
-                      onChange={(value) => updateMapping(index, { shortcut: value })}
-                      reservedShortcuts={systemShortcutValues}
-                      existingShortcuts={getExistingShortcuts(index)}
-                    />
-                  </div>
-                  <span className="text-coral text-sm">→</span>
-                  <div className="flex-1">
-                    <Dropdown
-                      value={mapping.folder}
-                      options={folders.map((f) => ({ value: f, label: f }))}
-                      onChange={(value) => updateMapping(index, { folder: value })}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeMapping(index)}
-                    className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
-                    title="Remove shortcut"
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <path d="M3 6h18" />
-                      <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                      <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                    </svg>
-                  </button>
+          <div className="space-y-2">
+            {settings.shortcut_mappings.map((mapping, index) => (
+              <div
+                key={index}
+                className="flex items-center gap-2 px-3 py-2 bg-line/30 rounded-xl border border-line/50"
+              >
+                <div className="flex-1 min-w-0">
+                  <ShortcutRecorder
+                    value={mapping.shortcut}
+                    onChange={(value) =>
+                      updateMapping(index, { shortcut: value })
+                    }
+                    reservedShortcuts={systemShortcutValues}
+                    existingShortcuts={getExistingShortcuts(index)}
+                  />
                 </div>
-              ))}
-            </div>
-
-            <button
-              type="button"
-              onClick={addMapping}
-              className="mt-4 w-full px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
-            >
-              <span className="text-lg">+</span>
-              <span>Add shortcut</span>
-            </button>
-
-            <div className="mt-6">
-              <p className="text-[12px] text-stone mb-3">System shortcuts</p>
-              <div className="space-y-2">
-                {SYSTEM_SHORTCUT_ACTIONS.map((action) => {
-                  const currentShortcut =
-                    settings.system_shortcuts?.[action] ?? SYSTEM_SHORTCUT_DEFAULTS[action];
-                  const isDefault = currentShortcut === SYSTEM_SHORTCUT_DEFAULTS[action];
-                  // Other system shortcuts + all folder shortcuts are reserved for this recorder
-                  const otherSystemShortcuts = SYSTEM_SHORTCUT_ACTIONS
-                    .filter((a) => a !== action)
-                    .map((a) => settings.system_shortcuts?.[a] ?? SYSTEM_SHORTCUT_DEFAULTS[a]);
-                  const folderShortcuts = settings.shortcut_mappings.map((m) => m.shortcut);
-
-                  return (
-                    <div
-                      key={action}
-                      className="flex items-center gap-2 px-3 py-2 bg-line/30 rounded-xl border border-line/50"
-                    >
-                      <span className="w-[70px] shrink-0 text-[12px] text-ink font-medium">
-                        {SYSTEM_SHORTCUT_LABELS[action as SystemAction]}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <ShortcutRecorder
-                          value={currentShortcut}
-                          onChange={(value) =>
-                            onSettingsChange({
-                              ...settings,
-                              system_shortcuts: {
-                                ...settings.system_shortcuts,
-                                [action]: value,
-                              },
-                            })
-                          }
-                          reservedShortcuts={otherSystemShortcuts}
-                          existingShortcuts={folderShortcuts}
-                        />
-                      </div>
-                      {!isDefault && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onSettingsChange({
-                              ...settings,
-                              system_shortcuts: {
-                                ...settings.system_shortcuts,
-                                [action]: SYSTEM_SHORTCUT_DEFAULTS[action as SystemAction],
-                              },
-                            })
-                          }
-                          className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
-                          title="Reset to default"
-                        >
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                            <path d="M3 3v5h5" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {SYSTEM_SHORTCUT_ACTIONS.some(
-                (a) =>
-                  (settings.system_shortcuts?.[a] ?? SYSTEM_SHORTCUT_DEFAULTS[a]) !==
-                  SYSTEM_SHORTCUT_DEFAULTS[a]
-              ) && (
+                <span className="text-coral text-sm">→</span>
+                <div className="flex-1">
+                  <Dropdown
+                    value={mapping.folder}
+                    options={folders.map((f) => ({ value: f, label: f }))}
+                    onChange={(value) =>
+                      updateMapping(index, { folder: value })
+                    }
+                  />
+                </div>
                 <button
                   type="button"
-                  onClick={() =>
-                    onSettingsChange({
-                      ...settings,
-                      system_shortcuts: { ...SYSTEM_SHORTCUT_DEFAULTS },
-                    })
-                  }
-                  className="mt-2 text-[11px] text-coral hover:underline"
+                  onClick={() => removeMapping(index)}
+                  className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
+                  title="Remove shortcut"
                 >
-                  Reset all to defaults
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={addMapping}
+            className="mt-4 w-full px-4 py-3 text-[13px] text-coral hover:bg-coral-light rounded-xl transition-colors flex items-center justify-center gap-2 border border-dashed border-coral/30 hover:border-coral/50"
+          >
+            <span className="text-lg">+</span>
+            <span>Add shortcut</span>
+          </button>
+
+          <div className="mt-6">
+            <p className="text-[12px] text-stone mb-3">System shortcuts</p>
+            <div className="space-y-2">
+              {SYSTEM_SHORTCUT_ACTIONS.map((action) => {
+                const currentShortcut =
+                  settings.system_shortcuts?.[action] ??
+                  SYSTEM_SHORTCUT_DEFAULTS[action];
+                const isDefault =
+                  currentShortcut === SYSTEM_SHORTCUT_DEFAULTS[action];
+                // Other system shortcuts + all folder shortcuts are reserved for this recorder
+                const otherSystemShortcuts = SYSTEM_SHORTCUT_ACTIONS.filter(
+                  (a) => a !== action,
+                ).map(
+                  (a) =>
+                    settings.system_shortcuts?.[a] ??
+                    SYSTEM_SHORTCUT_DEFAULTS[a],
+                );
+                const folderShortcuts = settings.shortcut_mappings.map(
+                  (m) => m.shortcut,
+                );
+
+                return (
+                  <div
+                    key={action}
+                    className="flex items-center gap-2 px-3 py-2 bg-line/30 rounded-xl border border-line/50"
+                  >
+                    <span className="w-[70px] shrink-0 text-[12px] text-ink font-medium">
+                      {SYSTEM_SHORTCUT_LABELS[action as SystemAction]}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <ShortcutRecorder
+                        value={currentShortcut}
+                        onChange={(value) =>
+                          onSettingsChange({
+                            ...settings,
+                            system_shortcuts: {
+                              ...settings.system_shortcuts,
+                              [action]: value,
+                            },
+                          })
+                        }
+                        reservedShortcuts={otherSystemShortcuts}
+                        existingShortcuts={folderShortcuts}
+                      />
+                    </div>
+                    {!isDefault && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onSettingsChange({
+                            ...settings,
+                            system_shortcuts: {
+                              ...settings.system_shortcuts,
+                              [action]:
+                                SYSTEM_SHORTCUT_DEFAULTS[
+                                  action as SystemAction
+                                ],
+                            },
+                          })
+                        }
+                        className="w-6 h-6 shrink-0 flex items-center justify-center rounded-md hover:bg-coral-light text-stone hover:text-coral transition-colors"
+                        title="Reset to default"
+                      >
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                          <path d="M3 3v5h5" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {SYSTEM_SHORTCUT_ACTIONS.some(
+              (a) =>
+                (settings.system_shortcuts?.[a] ??
+                  SYSTEM_SHORTCUT_DEFAULTS[a]) !== SYSTEM_SHORTCUT_DEFAULTS[a],
+            ) && (
+              <button
+                type="button"
+                onClick={() =>
+                  onSettingsChange({
+                    ...settings,
+                    system_shortcuts: { ...SYSTEM_SHORTCUT_DEFAULTS },
+                  })
+                }
+                className="mt-2 text-[11px] text-coral hover:underline"
+              >
+                Reset all to defaults
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "folders" && (
+        <div className="space-y-4">
+          {/* iCloud Drive sync */}
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+            <div>
+              <p className="text-[13px] text-ink font-medium">iCloud Drive</p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Sync notes between Mac and iPhone via iCloud
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const newICloud = {
+                  ...settings.icloud,
+                  enabled: !settings.icloud?.enabled,
+                };
+                onSettingsChange({ ...settings, icloud: newICloud });
+              }}
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                settings.icloud?.enabled ? "bg-coral" : "bg-line"
+              }`}
+              title="Toggle iCloud Drive sync"
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.icloud?.enabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </label>
+
+          {settings.icloud?.enabled && (
+            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+              <p className="text-[12px] text-stone leading-relaxed">
+                Notes sync automatically between devices signed into the same
+                Apple ID. Git sharing is disabled while iCloud is active.
+              </p>
+              {!settings.icloud?.migrated && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const { invoke } = await import("@tauri-apps/api/core");
+                    try {
+                      const result = await invoke<{
+                        files_copied: number;
+                        errors: string[];
+                      }>("icloud_migrate_notes");
+                      if (result.files_copied > 0) {
+                        onSettingsChange({
+                          ...settings,
+                          icloud: { ...settings.icloud, migrated: true },
+                        });
+                      }
+                    } catch (e) {
+                      console.error("Migration failed:", e);
+                    }
+                  }}
+                  className="mt-2 px-3 py-1.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
+                >
+                  Copy existing notes to iCloud
                 </button>
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {activeTab === "folders" && (
-          <div className="space-y-4">
+          {/* Notes directory (hidden when iCloud is active) */}
+          {!settings.icloud?.enabled && (
             <div>
               <p className="text-[12px] text-stone mb-1.5">Notes directory</p>
               <div className="flex items-center gap-2">
@@ -1509,10 +1979,16 @@ export default function SettingsContent({
                       directory: true,
                       multiple: false,
                       title: "Choose where to store Stik notes",
-                      defaultPath: settings.notes_directory || resolvedNotesDir || undefined,
+                      defaultPath:
+                        settings.notes_directory ||
+                        resolvedNotesDir ||
+                        undefined,
                     });
                     if (selected) {
-                      onSettingsChange({ ...settings, notes_directory: selected });
+                      onSettingsChange({
+                        ...settings,
+                        notes_directory: selected,
+                      });
                     }
                   }}
                   className="px-3 py-2.5 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors whitespace-nowrap"
@@ -1532,507 +2008,674 @@ export default function SettingsContent({
                 )}
               </div>
               <p className="mt-1.5 text-[12px] text-stone leading-relaxed">
-                Stik creates a <span className="text-ink font-medium">Stik/</span> folder inside your chosen location.
-                Existing notes are not moved automatically.
+                Stik creates a{" "}
+                <span className="text-ink font-medium">Stik/</span> folder
+                inside your chosen location. Existing notes are not moved
+                automatically.
               </p>
             </div>
+          )}
 
-            <div>
-              <p className="text-[12px] text-stone mb-1.5">Default folder</p>
-              <div className="max-w-[360px]">
-                <Dropdown
-                  value={settings.default_folder}
-                  options={folders.map((f) => ({ value: f, label: f }))}
-                  onChange={(value) =>
-                    onSettingsChange({ ...settings, default_folder: value })
-                  }
-                />
-              </div>
-              <p className="mt-1.5 text-[12px] text-stone leading-relaxed">
-                Opens when using tray menu or if no folder is specified.
+          <div>
+            <p className="text-[12px] text-stone mb-1.5">Default folder</p>
+            <div className="max-w-[360px]">
+              <Dropdown
+                value={settings.default_folder}
+                options={folders.map((f) => ({ value: f, label: f }))}
+                onChange={(value) =>
+                  onSettingsChange({ ...settings, default_folder: value })
+                }
+              />
+            </div>
+            <p className="mt-1.5 text-[12px] text-stone leading-relaxed">
+              Opens when using tray menu or if no folder is specified.
+            </p>
+          </div>
+
+          {!settings.icloud?.enabled &&
+          settings.git_sharing.enabled &&
+          gitSyncStatus?.repo_initialized ? (
+            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
+              <p className="text-[12px] text-stone leading-relaxed">
+                <span className="text-ink font-medium">
+                  {settings.git_sharing.repository_layout === "stik_root"
+                    ? "All folders"
+                    : settings.git_sharing.shared_folder || "Inbox"}
+                </span>{" "}
+                synced via Git.{" "}
+                {onTabChange && (
+                  <button
+                    type="button"
+                    onClick={() => onTabChange("git")}
+                    className="text-coral hover:underline"
+                  >
+                    Settings &gt; Git
+                  </button>
+                )}
               </p>
             </div>
-
+          ) : !settings.icloud?.enabled ? (
             <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl">
               <p className="text-[12px] text-stone leading-relaxed">
                 Sync tip: notes are saved in {notesDir}. If that folder is
-                synced (iCloud Drive, Dropbox, Syncthing), Stik syncs across Macs automatically.
+                synced (iCloud Drive, Dropbox, Syncthing), Stik syncs across
+                Macs automatically.
               </p>
             </div>
-          </div>
-        )}
+          ) : null}
+        </div>
+      )}
 
-        {activeTab === "editor" && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-              <div>
-                <p className="text-[13px] text-ink font-medium">Font size</p>
-                <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                  Editor text size. Use <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">Cmd+</kbd> / <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">Cmd-</kbd> to
-                  adjust, <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">Cmd+0</kbd> to reset.
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    onSettingsChange({ ...settings, font_size: Math.max((settings.font_size ?? 14) - 1, 12) })
-                  }
-                  disabled={(settings.font_size ?? 14) <= 12}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-line text-[14px] text-ink hover:bg-line/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  -
-                </button>
-                <span className="w-8 text-center text-[13px] font-mono text-ink tabular-nums">
-                  {settings.font_size ?? 14}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onSettingsChange({ ...settings, font_size: Math.min((settings.font_size ?? 14) + 1, 48) })
-                  }
-                  disabled={(settings.font_size ?? 14) >= 48}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-line text-[14px] text-ink hover:bg-line/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                >
-                  +
-                </button>
-              </div>
-            </div>
-
-            <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-              <div>
-                <p className="text-[13px] text-ink font-medium">Vim mode</p>
-                <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                  Use Vim-style keybindings in the editor. Press <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">i</kbd> to
-                  type, <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">Esc</kbd> to
-                  return to Normal mode.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  onSettingsChange({
-                    ...settings,
-                    vim_mode_enabled: !settings.vim_mode_enabled,
-                  })
-                }
-                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-                  settings.vim_mode_enabled ? "bg-coral" : "bg-line"
-                }`}
-                title="Toggle Vim mode"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                    settings.vim_mode_enabled ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </label>
-
-            <div className="p-4 bg-line/30 rounded-xl border border-line/50">
-              <p className="text-[13px] text-ink font-medium mb-1">Text direction</p>
-              <p className="text-[12px] text-stone leading-relaxed mb-3">
-                Set text direction for the editor. Auto detects per line — ideal for Arabic, Hebrew, and mixed-language notes.
-              </p>
-              <div className="max-w-[240px]">
-                <Dropdown
-                  value={settings.text_direction || "auto"}
-                  options={[
-                    { value: "auto", label: "Auto (Recommended)" },
-                    { value: "ltr", label: "Left to Right" },
-                    { value: "rtl", label: "Right to Left" },
-                  ]}
-                  onChange={(value) =>
-                    onSettingsChange({ ...settings, text_direction: value })
-                  }
-                />
-              </div>
-            </div>
-
-            <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-              <div>
-                <p className="text-[13px] text-ink font-medium">Hide Dock icon</p>
-                <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                  Access Stik from the menu bar icon and global shortcuts.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  onSettingsChange({
-                    ...settings,
-                    hide_dock_icon: !settings.hide_dock_icon,
-                  })
-                }
-                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-                  settings.hide_dock_icon ? "bg-coral" : "bg-line"
-                }`}
-                title="Toggle Dock icon visibility"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                    settings.hide_dock_icon ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </label>
-
-            <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
-              <div>
-                <p className="text-[13px] text-ink font-medium">Hide menu bar icon</p>
-                <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                  Remove the tray icon from the menu bar. Stik is still accessible via global shortcuts.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  onSettingsChange({
-                    ...settings,
-                    hide_tray_icon: !settings.hide_tray_icon,
-                  })
-                }
-                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-                  settings.hide_tray_icon ? "bg-coral" : "bg-line"
-                }`}
-                title="Toggle menu bar icon visibility"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                    settings.hide_tray_icon ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </label>
-
-            <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
-              <p className="text-[13px] text-ink font-medium">Quick reference</p>
-              <div className="text-[12px] text-stone leading-relaxed space-y-1">
-                <p><span className="text-ink font-medium">Movement</span> — h j k l, w b (word), 0 $ (line), gg G (document)</p>
-                <p><span className="text-ink font-medium">Insert</span> — i (before), a (after), A (end of line), o O (new line)</p>
-                <p><span className="text-ink font-medium">Edit</span> — x dd cc cw C, yy p, diw ciw, ci/di + &quot; &apos; ( {'{'}</p>
-                <p><span className="text-ink font-medium">Visual</span> — v (chars), V (lines), d x (delete), y (yank), c (change)</p>
-                <p><span className="text-ink font-medium">Undo</span> — u, Ctrl+r (redo), . (repeat)</p>
-                <p><span className="text-ink font-medium">Commands</span> — :wq (save &amp; close), :q! (discard &amp; close)</p>
-              </div>
-            </div>
-
-            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
-              <p className="text-[12px] font-semibold text-ink">How to close</p>
-              <p className="text-[12px] text-stone leading-relaxed">
-                Press <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">:</kbd> in
-                Normal mode to open the command bar, then type <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">wq</kbd> + Enter
-                to save and close. Escape always switches between Insert and Normal mode.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "templates" && (
-          <TemplatesSection
-            templates={settings.custom_templates ?? []}
-            onChange={(templates) =>
-              onSettingsChange({ ...settings, custom_templates: templates })
-            }
-          />
-        )}
-
-        {activeTab === "git" && (
-          <div className="space-y-3">
-            <label className="flex items-center justify-between gap-3">
-              <span className="text-[13px] text-ink font-medium">Enable Git sharing</span>
-              <button
-                type="button"
-                onClick={() => updateGitSharing({ enabled: !settings.git_sharing.enabled })}
-                className={`relative w-11 h-6 rounded-full transition-colors ${
-                  settings.git_sharing.enabled ? "bg-coral" : "bg-line"
-                }`}
-                title="Toggle Git sharing"
-              >
-                <span
-                  className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                    settings.git_sharing.enabled ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
-            </label>
-
+      {activeTab === "editor" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
-              <p className="text-[12px] text-stone mb-1.5">Repository layout</p>
+              <p className="text-[13px] text-ink font-medium">Font size</p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Editor text size. Use{" "}
+                <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                  Cmd+
+                </kbd>{" "}
+                /{" "}
+                <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                  Cmd-
+                </kbd>{" "}
+                to adjust,{" "}
+                <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                  Cmd+0
+                </kbd>{" "}
+                to reset.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() =>
+                  onSettingsChange({
+                    ...settings,
+                    font_size: Math.max((settings.font_size ?? 14) - 1, 12),
+                  })
+                }
+                disabled={(settings.font_size ?? 14) <= 12}
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-line text-[14px] text-ink hover:bg-line/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                -
+              </button>
+              <span className="w-8 text-center text-[13px] font-mono text-ink tabular-nums">
+                {settings.font_size ?? 14}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  onSettingsChange({
+                    ...settings,
+                    font_size: Math.min((settings.font_size ?? 14) + 1, 48),
+                  })
+                }
+                disabled={(settings.font_size ?? 14) >= 48}
+                className="w-7 h-7 flex items-center justify-center rounded-lg border border-line text-[14px] text-ink hover:bg-line/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+            <div>
+              <p className="text-[13px] text-ink font-medium">Vim mode</p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Use Vim-style keybindings in the editor. Press{" "}
+                <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                  i
+                </kbd>{" "}
+                to type,{" "}
+                <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                  Esc
+                </kbd>{" "}
+                to return to Normal mode.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSettingsChange({
+                  ...settings,
+                  vim_mode_enabled: !settings.vim_mode_enabled,
+                })
+              }
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                settings.vim_mode_enabled ? "bg-coral" : "bg-line"
+              }`}
+              title="Toggle Vim mode"
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.vim_mode_enabled ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </label>
+
+          <div className="p-4 bg-line/30 rounded-xl border border-line/50">
+            <p className="text-[13px] text-ink font-medium mb-1">
+              Text direction
+            </p>
+            <p className="text-[12px] text-stone leading-relaxed mb-3">
+              Set text direction for the editor. Auto detects per line — ideal
+              for Arabic, Hebrew, and mixed-language notes.
+            </p>
+            <div className="max-w-[240px]">
               <Dropdown
-                value={settings.git_sharing.repository_layout}
+                value={settings.text_direction || "auto"}
                 options={[
-                  { value: "folder_root", label: "Selected folder is repo root" },
-                  { value: "stik_root", label: "Whole Stik folder is repo root" },
+                  { value: "auto", label: "Auto (Recommended)" },
+                  { value: "ltr", label: "Left to Right" },
+                  { value: "rtl", label: "Right to Left" },
                 ]}
                 onChange={(value) =>
-                  updateGitSharing({
-                    repository_layout: value as "folder_root" | "stik_root",
-                  })
+                  onSettingsChange({ ...settings, text_direction: value })
                 }
               />
             </div>
+          </div>
 
-            {settings.git_sharing.repository_layout === "folder_root" ? (
-              <div>
-                <p className="text-[12px] text-stone mb-1.5">Shared folder</p>
-                <Dropdown
-                  value={settings.git_sharing.shared_folder}
-                  options={folders.map((f) => ({ value: f, label: f }))}
-                  onChange={(value) => updateGitSharing({ shared_folder: value })}
-                />
-              </div>
-            ) : (
-              <p className="text-[12px] text-stone leading-relaxed">
-                Notes are synced from your full Stik root, so GitHub will show folders like
-                <span className="mx-1 text-ink">Inbox/</span>
-                <span className="text-ink">Work/</span>
-                <span className="mx-1 text-ink">Ideas/</span>.
-              </p>
-            )}
-
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
             <div>
-              <p className="text-[12px] text-stone mb-1.5">Remote URL</p>
-              <input
-                type="text"
-                value={settings.git_sharing.remote_url}
-                onChange={(e) => updateGitSharing({ remote_url: e.target.value })}
-                placeholder="https://github.com/your-org/stik-notes.git"
-                className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
+              <p className="text-[13px] text-ink font-medium">Hide Dock icon</p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Access Stik from the menu bar icon and global shortcuts.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSettingsChange({
+                  ...settings,
+                  hide_dock_icon: !settings.hide_dock_icon,
+                })
+              }
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                settings.hide_dock_icon ? "bg-coral" : "bg-line"
+              }`}
+              title="Toggle Dock icon visibility"
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.hide_dock_icon ? "translate-x-5" : "translate-x-0"
+                }`}
               />
-            </div>
+            </button>
+          </label>
 
-            <div className="grid grid-cols-[1fr_130px] gap-3">
-              <div>
-                <p className="text-[12px] text-stone mb-1.5">Branch</p>
-                <input
-                  type="text"
-                  value={settings.git_sharing.branch}
-                  onChange={(e) => updateGitSharing({ branch: e.target.value })}
-                  placeholder="main"
-                  className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
-                />
-              </div>
-              <div>
-                <p className="text-[12px] text-stone mb-1.5">Pull interval</p>
-                <input
-                  type="number"
-                  min={60}
-                  step={30}
-                  value={settings.git_sharing.sync_interval_seconds}
-                  onChange={(e) => {
-                    const parsed = Number.parseInt(e.target.value || "300", 10);
-                    updateGitSharing({
-                      sync_interval_seconds: Number.isFinite(parsed) ? Math.max(parsed, 60) : 300,
-                    });
-                  }}
-                  className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink focus:outline-none focus:border-coral/50"
-                />
-              </div>
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+            <div>
+              <p className="text-[13px] text-ink font-medium">
+                Hide menu bar icon
+              </p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Remove the tray icon from the menu bar. Stik is still accessible
+                via global shortcuts.
+              </p>
             </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSettingsChange({
+                  ...settings,
+                  hide_tray_icon: !settings.hide_tray_icon,
+                })
+              }
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                settings.hide_tray_icon ? "bg-coral" : "bg-line"
+              }`}
+              title="Toggle menu bar icon visibility"
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.hide_tray_icon ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </label>
 
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={onPrepareGitRepository}
-                disabled={isPreparingGitRepo || isSyncingGitNow}
-                className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
-              >
-                {isPreparingGitRepo ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="animate-spin">↻</span>
-                    <span>Linking...</span>
-                  </span>
-                ) : (
-                  "Link repository"
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={onSyncGitNow}
-                disabled={isSyncingGitNow}
-                className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
-              >
-                {isSyncingGitNow ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="animate-spin">↻</span>
-                    <span>Syncing...</span>
-                  </span>
-                ) : (
-                  "Sync now"
-                )}
-              </button>
-              {remoteWebUrl && (
-                <button
-                  type="button"
-                  onClick={onOpenGitRemote}
-                  disabled={isOpeningGitRemote}
-                  className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
-                >
-                  {isOpeningGitRemote ? "Opening..." : "Open remote"}
-                </button>
-              )}
-            </div>
-
-            <div className="text-[12px] text-stone leading-relaxed space-y-0.5">
+          <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
+            <p className="text-[13px] text-ink font-medium">Quick reference</p>
+            <div className="text-[12px] text-stone leading-relaxed space-y-1">
               <p>
-                Status:{" "}
-                <span className="text-ink font-medium">
-                  {gitSyncStatus?.repo_initialized ? "Repository linked" : "Not linked yet"}
-                </span>
+                <span className="text-ink font-medium">Movement</span> — h j k
+                l, w b (word), 0 $ (line), gg G (document)
               </p>
-              {gitSyncStatus?.last_sync_at && (
-                <p>Last sync: {new Date(gitSyncStatus.last_sync_at).toLocaleString()}</p>
-              )}
-              {gitSyncStatus?.last_error && (
-                <p className="text-coral">Last error: {gitSyncStatus.last_error}</p>
-              )}
-              <p>Auto-sync commits and pushes changes ~30s after note edits in the shared folder.</p>
-            </div>
-
-            <div className="p-3 bg-coral-light/35 border border-coral/20 rounded-xl space-y-1">
-              <p className="text-[12px] font-semibold text-ink">GitHub account setup</p>
-              <p className="text-[12px] text-stone leading-relaxed">
-                Stik uses your existing Git credentials on this Mac (SSH key or HTTPS credential
-                helper). Stik does not ask for or store GitHub tokens.
+              <p>
+                <span className="text-ink font-medium">Insert</span> — i
+                (before), a (after), A (end of line), o O (new line)
               </p>
-              <p className="text-[12px] text-stone leading-relaxed">
-                If auth fails once, run this in Terminal to complete login:
+              <p>
+                <span className="text-ink font-medium">Edit</span> — x dd cc cw
+                C, yy p, diw ciw, ci/di + &quot; &apos; ( {"{"}
               </p>
-              <code className="block px-2.5 py-2 text-[11px] rounded-lg bg-bg border border-line text-ink break-all">
-                git -C "{linkedRepoPath}" push
-              </code>
+              <p>
+                <span className="text-ink font-medium">Visual</span> — v
+                (chars), V (lines), d x (delete), y (yank), c (change)
+              </p>
+              <p>
+                <span className="text-ink font-medium">Undo</span> — u, Ctrl+r
+                (redo), . (repeat)
+              </p>
+              <p>
+                <span className="text-ink font-medium">Commands</span> — :wq
+                (save &amp; close), :q! (discard &amp; close)
+              </p>
             </div>
           </div>
-        )}
 
-        {activeTab === "ai" && (
-          <div className="space-y-4">
-            <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+          <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
+            <p className="text-[12px] font-semibold text-ink">How to close</p>
+            <p className="text-[12px] text-stone leading-relaxed">
+              Press{" "}
+              <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                :
+              </kbd>{" "}
+              in Normal mode to open the command bar, then type{" "}
+              <kbd className="px-1 py-0.5 bg-bg border border-line rounded text-[11px] font-mono">
+                wq
+              </kbd>{" "}
+              + Enter to save and close. Escape always switches between Insert
+              and Normal mode.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "templates" && (
+        <TemplatesSection
+          templates={settings.custom_templates ?? []}
+          onChange={(templates) =>
+            onSettingsChange({ ...settings, custom_templates: templates })
+          }
+        />
+      )}
+
+      {activeTab === "git" && (
+        <div className="space-y-3">
+          {settings.icloud?.enabled && (
+            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl mb-2">
+              <p className="text-[12px] text-stone leading-relaxed">
+                Git sharing is disabled while iCloud sync is active. Disable
+                iCloud in the Folders tab to use Git sharing.
+              </p>
+            </div>
+          )}
+
+          {/* Enable toggle */}
+          <label
+            className={`flex items-center justify-between gap-3 ${settings.icloud?.enabled ? "opacity-50 pointer-events-none" : ""}`}
+          >
+            <span className="text-[13px] text-ink font-medium">
+              Enable Git sharing
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                updateGitSharing({ enabled: !settings.git_sharing.enabled })
+              }
+              className={`relative w-11 h-6 rounded-full transition-colors ${
+                settings.git_sharing.enabled ? "bg-coral" : "bg-line"
+              }`}
+              title="Toggle Git sharing"
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.git_sharing.enabled
+                    ? "translate-x-5"
+                    : "translate-x-0"
+                }`}
+              />
+            </button>
+          </label>
+
+          {/* Remote URL — primary field */}
+          <div>
+            <p className="text-[12px] text-stone mb-1.5">Remote URL</p>
+            <input
+              type="text"
+              value={settings.git_sharing.remote_url}
+              onChange={(e) => updateGitSharing({ remote_url: e.target.value })}
+              placeholder="https://github.com/your-org/stik-notes.git"
+              className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
+            />
+          </div>
+
+          {/* Shared folder — only for folder_root layout */}
+          {settings.git_sharing.repository_layout === "folder_root" ? (
+            <div>
+              <p className="text-[12px] text-stone mb-1.5">Shared folder</p>
+              <Dropdown
+                value={settings.git_sharing.shared_folder}
+                options={folders.map((f) => ({ value: f, label: f }))}
+                onChange={(value) => updateGitSharing({ shared_folder: value })}
+              />
+            </div>
+          ) : (
+            <p className="text-[12px] text-stone leading-relaxed">
+              Notes are synced from your full Stik root, so GitHub will show
+              folders like
+              <span className="mx-1 text-ink">Inbox/</span>
+              <span className="text-ink">Work/</span>
+              <span className="mx-1 text-ink">Ideas/</span>.
+            </p>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onPrepareGitRepository}
+              disabled={isPreparingGitRepo || isSyncingGitNow}
+              className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
+            >
+              {isPreparingGitRepo ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="animate-spin">↻</span>
+                  <span>Linking...</span>
+                </span>
+              ) : (
+                "Link repository"
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onSyncGitNow}
+              disabled={isSyncingGitNow}
+              className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
+            >
+              {isSyncingGitNow ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="animate-spin">↻</span>
+                  <span>Syncing...</span>
+                </span>
+              ) : (
+                "Sync now"
+              )}
+            </button>
+            {remoteWebUrl && (
+              <button
+                type="button"
+                onClick={onOpenGitRemote}
+                disabled={isOpeningGitRemote}
+                className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors"
+              >
+                {isOpeningGitRemote ? "Opening..." : "Open remote"}
+              </button>
+            )}
+          </div>
+
+          {/* Status */}
+          <div className="text-[12px] text-stone leading-relaxed space-y-0.5">
+            <p>
+              Status:{" "}
+              <span className="text-ink font-medium">
+                {gitSyncStatus?.repo_initialized
+                  ? "Repository linked"
+                  : "Not linked yet"}
+              </span>
+            </p>
+            {gitSyncStatus?.last_sync_at && (
+              <p>
+                Last sync:{" "}
+                {new Date(gitSyncStatus.last_sync_at).toLocaleString()}
+              </p>
+            )}
+            {gitSyncStatus?.last_error && (
+              <p className="text-coral">
+                Last error: {gitSyncStatus.last_error}
+              </p>
+            )}
+            <p>
+              Auto-sync commits and pushes changes ~30s after note edits in the
+              shared folder.
+            </p>
+          </div>
+
+          {/* Advanced toggle */}
+          <button
+            type="button"
+            onClick={() => setShowGitAdvanced(!showGitAdvanced)}
+            className="flex items-center gap-1 text-[12px] text-stone hover:text-ink transition-colors"
+          >
+            <span>{showGitAdvanced ? "▾" : "▸"}</span>
+            <span>Advanced</span>
+          </button>
+
+          {showGitAdvanced && (
+            <div className="space-y-3 pl-3 border-l-2 border-line">
               <div>
-                <p className="text-[13px] text-ink font-medium">Enable AI features</p>
+                <p className="text-[12px] text-stone mb-1.5">
+                  Repository layout
+                </p>
+                <Dropdown
+                  value={settings.git_sharing.repository_layout}
+                  options={[
+                    {
+                      value: "folder_root",
+                      label: "Selected folder is repo root",
+                    },
+                    {
+                      value: "stik_root",
+                      label: "Whole Stik folder is repo root",
+                    },
+                  ]}
+                  onChange={(value) =>
+                    updateGitSharing({
+                      repository_layout: value as "folder_root" | "stik_root",
+                    })
+                  }
+                />
+              </div>
+
+              <div className="grid grid-cols-[1fr_130px] gap-3">
+                <div>
+                  <p className="text-[12px] text-stone mb-1.5">Branch</p>
+                  <input
+                    type="text"
+                    value={settings.git_sharing.branch}
+                    onChange={(e) =>
+                      updateGitSharing({ branch: e.target.value })
+                    }
+                    placeholder="main"
+                    className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink placeholder:text-stone/70 focus:outline-none focus:border-coral/50"
+                  />
+                </div>
+                <div>
+                  <p className="text-[12px] text-stone mb-1.5">Pull interval</p>
+                  <input
+                    type="number"
+                    min={60}
+                    step={30}
+                    value={settings.git_sharing.sync_interval_seconds}
+                    onChange={(e) => {
+                      const parsed = Number.parseInt(
+                        e.target.value || "300",
+                        10,
+                      );
+                      updateGitSharing({
+                        sync_interval_seconds: Number.isFinite(parsed)
+                          ? Math.max(parsed, 60)
+                          : 300,
+                      });
+                    }}
+                    className="w-full px-3 py-2.5 bg-bg border border-line rounded-lg text-[13px] text-ink focus:outline-none focus:border-coral/50"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* GitHub credentials tip */}
+          <div className="p-3 bg-coral-light/35 border border-coral/20 rounded-xl space-y-1">
+            <p className="text-[12px] font-semibold text-ink">
+              GitHub account setup
+            </p>
+            <p className="text-[12px] text-stone leading-relaxed">
+              Stik uses your existing Git credentials on this Mac (SSH key or
+              HTTPS credential helper). Stik does not ask for or store GitHub
+              tokens.
+            </p>
+            <p className="text-[12px] text-stone leading-relaxed">
+              If auth fails once, run this in Terminal to complete login:
+            </p>
+            <code className="block px-2.5 py-2 text-[11px] rounded-lg bg-bg border border-line text-ink break-all">
+              git -C "{linkedRepoPath}" push
+            </code>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "ai" && (
+        <div className="space-y-4">
+          <label className="flex items-center justify-between gap-3 p-4 bg-line/30 rounded-xl border border-line/50">
+            <div>
+              <p className="text-[13px] text-ink font-medium">
+                Enable AI features
+              </p>
+              <p className="mt-1 text-[12px] text-stone leading-relaxed">
+                Powers semantic search in the search bar and folder suggestions
+                while capturing notes.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onSettingsChange({
+                  ...settings,
+                  ai_features_enabled: !settings.ai_features_enabled,
+                })
+              }
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                settings.ai_features_enabled ? "bg-coral" : "bg-line"
+              }`}
+              title="Toggle AI features"
+            >
+              <span
+                className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
+                  settings.ai_features_enabled
+                    ? "translate-x-5"
+                    : "translate-x-0"
+                }`}
+              />
+            </button>
+          </label>
+
+          <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
+            <p className="text-[13px] text-ink font-medium">How it works</p>
+            <ul className="text-[12px] text-stone leading-relaxed space-y-1.5">
+              <li>
+                <span className="text-ink font-medium">Semantic search</span> —
+                find notes by meaning, not just keywords. Search "what to buy"
+                to find your grocery list.
+              </li>
+              <li>
+                <span className="text-ink font-medium">Folder suggestions</span>{" "}
+                — while capturing, Stik suggests the best folder based on what
+                you're writing.
+              </li>
+              <li>
+                <span className="text-ink font-medium">Note embeddings</span> —
+                each note gets a numeric fingerprint used for similarity
+                matching. Built in the background.
+              </li>
+            </ul>
+          </div>
+
+          <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
+            <p className="text-[12px] font-semibold text-ink">Privacy</p>
+            <p className="text-[12px] text-stone leading-relaxed">
+              All processing happens on-device via Apple NaturalLanguage. No
+              data leaves your Mac. English works best; other languages have
+              limited semantic understanding.
+            </p>
+          </div>
+
+          {!settings.ai_features_enabled && (
+            <p className="text-[12px] text-stone text-center">
+              Restart Stik after enabling to start the AI engine.
+            </p>
+          )}
+        </div>
+      )}
+
+      {activeTab === "insights" && (
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-coral">↻</span>
+              <h3 className="text-[13px] font-semibold text-stone uppercase tracking-wide">
+                Capture Streak
+              </h3>
+            </div>
+            <div className="p-4 bg-line/30 rounded-xl border border-line/50 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[14px] font-semibold text-ink">
+                  {captureStreakLabel}
+                </p>
                 <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                  Powers semantic search in the search bar and folder suggestions while
-                  capturing notes.
+                  Consecutive days with at least one captured note.
+                  {captureStreakDays === null
+                    ? " Open settings again if this stays unavailable."
+                    : ""}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() =>
-                  onSettingsChange({
-                    ...settings,
-                    ai_features_enabled: !settings.ai_features_enabled,
-                  })
-                }
-                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
-                  settings.ai_features_enabled ? "bg-coral" : "bg-line"
-                }`}
-                title="Toggle AI features"
+                onClick={onRefreshCaptureStreak}
+                disabled={isRefreshingStreak}
+                className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
               >
-                <span
-                  className={`absolute left-0.5 top-0.5 w-5 h-5 rounded-full bg-white transition-transform pointer-events-none ${
-                    settings.ai_features_enabled ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
+                {isRefreshingStreak ? "Refreshing..." : "Refresh"}
               </button>
-            </label>
+            </div>
+          </div>
 
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-coral">☼</span>
+              <h3 className="text-[13px] font-semibold text-stone uppercase tracking-wide">
+                On This Day
+              </h3>
+            </div>
             <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
-              <p className="text-[13px] text-ink font-medium">How it works</p>
-              <ul className="text-[12px] text-stone leading-relaxed space-y-1.5">
-                <li>
-                  <span className="text-ink font-medium">Semantic search</span> — find notes by
-                  meaning, not just keywords. Search "what to buy" to find your grocery list.
-                </li>
-                <li>
-                  <span className="text-ink font-medium">Folder suggestions</span> — while
-                  capturing, Stik suggests the best folder based on what you're writing.
-                </li>
-                <li>
-                  <span className="text-ink font-medium">Note embeddings</span> — each note gets a
-                  numeric fingerprint used for similarity matching. Built in the background.
-                </li>
-              </ul>
-            </div>
-
-            <div className="p-3 bg-coral-light/40 border border-coral/20 rounded-xl space-y-1">
-              <p className="text-[12px] font-semibold text-ink">Privacy</p>
-              <p className="text-[12px] text-stone leading-relaxed">
-                All processing happens on-device via Apple NaturalLanguage. No data leaves your
-                Mac. English works best; other languages have limited semantic understanding.
+              <p className="text-[14px] font-semibold text-ink">
+                {onThisDayMessage}
               </p>
-            </div>
-
-            {!settings.ai_features_enabled && (
-              <p className="text-[12px] text-stone text-center">
-                Restart Stik after enabling to start the AI engine.
-              </p>
-            )}
-          </div>
-        )}
-
-        {activeTab === "insights" && (
-          <div className="space-y-4">
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-coral">↻</span>
-                <h3 className="text-[13px] font-semibold text-stone uppercase tracking-wide">
-                  Capture Streak
-                </h3>
-              </div>
-              <div className="p-4 bg-line/30 rounded-xl border border-line/50 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[14px] font-semibold text-ink">{captureStreakLabel}</p>
-                  <p className="mt-1 text-[12px] text-stone leading-relaxed">
-                    Consecutive days with at least one captured note.
-                    {captureStreakDays === null
-                      ? " Open settings again if this stays unavailable."
-                      : ""}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={onRefreshCaptureStreak}
-                  disabled={isRefreshingStreak}
-                  className="px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
-                >
-                  {isRefreshingStreak ? "Refreshing..." : "Refresh"}
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-coral">☼</span>
-                <h3 className="text-[13px] font-semibold text-stone uppercase tracking-wide">
-                  On This Day
-                </h3>
-              </div>
-              <div className="p-4 bg-line/30 rounded-xl border border-line/50 space-y-2">
-                <p className="text-[14px] font-semibold text-ink">{onThisDayMessage}</p>
-                {(onThisDayDate || onThisDayFolder) && (
-                  <p className="text-[12px] text-stone">
-                    {onThisDayFolder || "Folder unknown"} • {onThisDayDate || "Date unknown"}
-                  </p>
-                )}
-                {onThisDayPreview && (
-                  <p className="text-[12px] text-stone leading-relaxed">{onThisDayPreview}</p>
-                )}
-                <button
-                  type="button"
-                  onClick={onCheckOnThisDay}
-                  disabled={isCheckingOnThisDay}
-                  className="mt-2 px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
-                >
-                  {isCheckingOnThisDay ? "Checking..." : "Check now"}
-                </button>
-              </div>
+              {(onThisDayDate || onThisDayFolder) && (
+                <p className="text-[12px] text-stone">
+                  {onThisDayFolder || "Folder unknown"} •{" "}
+                  {onThisDayDate || "Date unknown"}
+                </p>
+              )}
+              {onThisDayPreview && (
+                <p className="text-[12px] text-stone leading-relaxed">
+                  {onThisDayPreview}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={onCheckOnThisDay}
+                disabled={isCheckingOnThisDay}
+                className="mt-2 px-3 py-2 text-[12px] text-coral border border-coral/30 rounded-lg hover:bg-coral-light transition-colors disabled:opacity-50"
+              >
+                {isCheckingOnThisDay ? "Checking..." : "Check now"}
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {activeTab === "privacy" && <PrivacySection settings={settings} onSettingsChange={onSettingsChange} />}
-
+      {activeTab === "privacy" && (
+        <PrivacySection
+          settings={settings}
+          onSettingsChange={onSettingsChange}
+        />
+      )}
     </div>
   );
 }

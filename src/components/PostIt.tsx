@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { flushSync } from "react-dom";
-import { completionStatus, startCompletion, closeCompletion } from "@codemirror/autocomplete";
+import {
+  completionStatus,
+  startCompletion,
+  closeCompletion,
+} from "@codemirror/autocomplete";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -9,7 +13,10 @@ import FolderPicker from "./FolderPicker";
 import AiMenu from "./AiMenu";
 import type { StickedNote, StikSettings } from "@/types";
 import type { VimMode } from "@/extensions/cm-vim";
-import { getSlashCommandNames, setCustomTemplates } from "@/extensions/cm-slash-commands";
+import {
+  getSlashCommandNames,
+  setCustomTemplates,
+} from "@/extensions/cm-slash-commands";
 import {
   isMarkdownEffectivelyEmpty,
   normalizeMarkdownForCopy,
@@ -26,11 +33,14 @@ import { resolveCaptureFolder } from "@/utils/folderSelection";
 import { getFolderColor } from "@/utils/folderColors";
 import { formatShortcutDisplay } from "./ShortcutRecorder";
 import { loadGoogleFont, loadCustomFont } from "@/utils/fonts";
-
+import SyncIndicator from "./SyncIndicator";
 
 interface PostItProps {
   folder: string;
-  onSave: (content: string, preferredFolder?: string) => Promise<string | undefined | void>;
+  onSave: (
+    content: string,
+    preferredFolder?: string,
+  ) => Promise<string | undefined | void>;
   onClose: () => void;
   onFolderChange: (folder: string) => void;
   onOpenSettings?: () => void;
@@ -111,16 +121,27 @@ export default function PostIt({
   const [fontSize, setFontSize] = useState(14);
   const [fontFamily, setFontFamily] = useState<string | null>(null);
   const [windowOpacity, setWindowOpacity] = useState(1.0);
-  const [customFonts, setCustomFonts] = useState<import("@/types").CustomFontEntry[]>([]);
+  const [customFonts, setCustomFonts] = useState<
+    import("@/types").CustomFontEntry[]
+  >([]);
   const [folderColors, setFolderColors] = useState<Record<string, string>>({});
-  const [systemShortcuts, setSystemShortcuts] = useState<Record<string, string>>({});
+  const [systemShortcuts, setSystemShortcuts] = useState<
+    Record<string, string>
+  >({});
   const [vimMode, setVimMode] = useState<VimMode>("normal");
   const [vimCommand, setVimCommand] = useState("");
   const [vimCommandError, setVimCommandError] = useState("");
-  const [textDirection, setTextDirection] = useState<"auto" | "ltr" | "rtl">("auto");
+  const [textDirection, setTextDirection] = useState<"auto" | "ltr" | "rtl">(
+    "auto",
+  );
+  const [icloudEnabled, setIcloudEnabled] = useState(false);
   const [zenMode, setZenMode] = useState(false);
   const [formatToolbar, setFormatToolbar] = useState(() => {
-    try { return localStorage.getItem("stik:format-toolbar") !== "0"; } catch { return true; }
+    try {
+      return localStorage.getItem("stik:format-toolbar") !== "0";
+    } catch {
+      return true;
+    }
   });
   const commandInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<EditorRef | null>(null);
@@ -128,7 +149,9 @@ export default function PostIt({
   const foldersRef = useRef<string[]>([]);
   const contentRef = useRef(content);
   const cursorSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingCursorRef = useRef<{ head: number; anchor: number } | null>(null);
+  const pendingCursorRef = useRef<{ head: number; anchor: number } | null>(
+    null,
+  );
   // Suppresses cursor saves until the restore completes — prevents the initial
   // selection at (0,0) from overwriting the previously saved position.
   const isRestoringCursorRef = useRef(true);
@@ -136,9 +159,10 @@ export default function PostIt({
   // Unique key for cursor position persistence.
   // Viewing windows use file path so cursor persists across Cmd+Shift+L reopens.
   // Regular sticked notes use their UUID.
-  const cursorPosKey = (isViewing && originalPath)
-    ? originalPath
-    : (currentStickedId || stickedId || null);
+  const cursorPosKey =
+    isViewing && originalPath
+      ? originalPath
+      : currentStickedId || stickedId || null;
 
   useEffect(() => {
     contentRef.current = content;
@@ -150,7 +174,11 @@ export default function PostIt({
       if (cursorSaveTimerRef.current) clearTimeout(cursorSaveTimerRef.current);
       if (pendingCursorRef.current && cursorPosKey) {
         const { head, anchor } = pendingCursorRef.current;
-        invoke("save_cursor_position", { id: cursorPosKey, head, anchor }).catch(() => {});
+        invoke("save_cursor_position", {
+          id: cursorPosKey,
+          head,
+          anchor,
+        }).catch(() => {});
       }
     };
   }, [cursorPosKey]);
@@ -158,13 +186,18 @@ export default function PostIt({
   // Resolve the notes directory path for image path resolution
   const [notesDir, setNotesDir] = useState<string | null>(null);
   useEffect(() => {
-    invoke<string>("get_notes_directory").then(setNotesDir).catch(() => {});
+    invoke<string>("get_notes_directory")
+      .then(setNotesDir)
+      .catch(() => {});
   }, []);
 
   // Apply font family: load from custom fonts or Google Fonts, then update the CSS var.
   useEffect(() => {
     if (!fontFamily) {
-      document.documentElement.style.setProperty("--editor-font-family", "inherit");
+      document.documentElement.style.setProperty(
+        "--editor-font-family",
+        "inherit",
+      );
       return;
     }
     const customEntry = customFonts.find((f) => f.name === fontFamily);
@@ -174,7 +207,7 @@ export default function PostIt({
         if (ok) {
           document.documentElement.style.setProperty(
             "--editor-font-family",
-            `"${fontFamily}", sans-serif`
+            `"${fontFamily}", sans-serif`,
           );
         }
       });
@@ -182,7 +215,7 @@ export default function PostIt({
       loadGoogleFont(fontFamily);
       document.documentElement.style.setProperty(
         "--editor-font-family",
-        `"${fontFamily}", sans-serif`
+        `"${fontFamily}", sans-serif`,
       );
     }
   }, [fontFamily, customFonts]);
@@ -205,12 +238,17 @@ export default function PostIt({
 
   // Resolve image paths for display when loading content with existing images
   const baseInitialContent = initialContent || "";
-  const resolvedInitialContent = notesDir && baseInitialContent
-    ? resolveImagePaths(baseInitialContent, `${notesDir}/${folder}`, convertFileSrc)
-    : baseInitialContent;
+  const resolvedInitialContent =
+    notesDir && baseInitialContent
+      ? resolveImagePaths(
+          baseInitialContent,
+          `${notesDir}/${folder}`,
+          convertFileSrc,
+        )
+      : baseInitialContent;
   const hasResolvableAssetImages =
     /(?:\]\(\.assets\/|src=["']\.assets\/|asset:\/\/localhost\/|asset\.localhost\/|file:\/\/\/)/.test(
-      baseInitialContent
+      baseInitialContent,
     );
   const shouldWaitForNotesDir = hasResolvableAssetImages && !notesDir;
 
@@ -233,11 +271,16 @@ export default function PostIt({
         setFolderColors(s.folder_colors ?? {});
         setSystemShortcuts(s.system_shortcuts ?? {});
         setCustomTemplates(s.custom_templates ?? []);
-        setTextDirection((s.text_direction as "auto" | "ltr" | "rtl") || "auto");
+        setTextDirection(
+          (s.text_direction as "auto" | "ltr" | "rtl") || "auto",
+        );
+        setIcloudEnabled(s.icloud?.enabled ?? false);
       })
       .catch(() => {});
     invoke<string[]>("list_folders")
-      .then((f) => { foldersRef.current = f; })
+      .then((f) => {
+        foldersRef.current = f;
+      })
       .catch(() => {});
 
     const unlisten = listen<StikSettings>("settings-changed", (event) => {
@@ -249,9 +292,14 @@ export default function PostIt({
       setFolderColors(event.payload.folder_colors ?? {});
       setSystemShortcuts(event.payload.system_shortcuts ?? {});
       setCustomTemplates(event.payload.custom_templates ?? []);
-      setTextDirection((event.payload.text_direction as "auto" | "ltr" | "rtl") || "auto");
+      setTextDirection(
+        (event.payload.text_direction as "auto" | "ltr" | "rtl") || "auto",
+      );
+      setIcloudEnabled(event.payload.icloud?.enabled ?? false);
     });
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, []);
 
   // Close viewing window when its note is deleted from another window (e.g. search)
@@ -267,7 +315,9 @@ export default function PostIt({
       }
     });
 
-    return () => { unlisten.then((fn) => fn()); };
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [isViewing, originalPath, currentStickedId, stickedId]);
 
   // Focus editor on mount, when folder changes, or when editor becomes available after settings load
@@ -285,7 +335,9 @@ export default function PostIt({
       clearTimeout(cursorSaveTimerRef.current);
       cursorSaveTimerRef.current = null;
     }
-    invoke("save_cursor_position", { id: cursorPosKey, head, anchor }).catch(() => {});
+    invoke("save_cursor_position", { id: cursorPosKey, head, anchor }).catch(
+      () => {},
+    );
   }, [cursorPosKey]);
 
   // Debounced cursor position save — 500ms after last cursor movement
@@ -297,10 +349,14 @@ export default function PostIt({
       if (cursorSaveTimerRef.current) clearTimeout(cursorSaveTimerRef.current);
       cursorSaveTimerRef.current = setTimeout(() => {
         pendingCursorRef.current = null;
-        invoke("save_cursor_position", { id: cursorPosKey, head, anchor }).catch(() => {});
+        invoke("save_cursor_position", {
+          id: cursorPosKey,
+          head,
+          anchor,
+        }).catch(() => {});
       }, 500);
     },
-    [cursorPosKey]
+    [cursorPosKey],
   );
 
   // Save cursor position on window blur — fires reliably before close/hide
@@ -322,7 +378,9 @@ export default function PostIt({
     }
     isRestoringCursorRef.current = true;
     const timer = setTimeout(() => {
-      invoke<{ head: number; anchor: number } | null>("get_cursor_position", { id: cursorPosKey })
+      invoke<{ head: number; anchor: number } | null>("get_cursor_position", {
+        id: cursorPosKey,
+      })
         .then((pos) => {
           if (pos) editorRef.current?.setCursor(pos.head, pos.anchor);
         })
@@ -392,20 +450,27 @@ export default function PostIt({
   useEffect(() => {
     if (isSticked) return; // Only main capture window listens
 
-    const unlisten = listen<{ content: string; folder: string }>("transfer-content", (event) => {
-      const transferredContent = event.payload.content || "";
-      setContent(transferredContent);
-      onFolderChange(event.payload.folder);
-      const resolvedContent = notesDir
-        ? resolveImagePaths(transferredContent, `${notesDir}/${event.payload.folder}`, convertFileSrc)
-        : transferredContent;
-      // Focus editor and move cursor to end
-      setTimeout(() => {
-        editorRef.current?.setContent(resolvedContent);
-        editorRef.current?.focus();
-        editorRef.current?.moveToEnd?.();
-      }, 100);
-    });
+    const unlisten = listen<{ content: string; folder: string }>(
+      "transfer-content",
+      (event) => {
+        const transferredContent = event.payload.content || "";
+        setContent(transferredContent);
+        onFolderChange(event.payload.folder);
+        const resolvedContent = notesDir
+          ? resolveImagePaths(
+              transferredContent,
+              `${notesDir}/${event.payload.folder}`,
+              convertFileSrc,
+            )
+          : transferredContent;
+        // Focus editor and move cursor to end
+        setTimeout(() => {
+          editorRef.current?.setContent(resolvedContent);
+          editorRef.current?.focus();
+          editorRef.current?.moveToEnd?.();
+        }, 100);
+      },
+    );
 
     return () => {
       unlisten.then((fn) => fn());
@@ -425,19 +490,16 @@ export default function PostIt({
       markdown: string;
       title?: string;
       folder_name?: string;
-    }>(
-      "apple-note-imported",
-      (event) => {
-        const md = event.payload.markdown;
-        setContent(md);
-        onContentChange?.(md);
-        setTimeout(() => {
-          editorRef.current?.setContent(md);
-          editorRef.current?.focus();
-          editorRef.current?.moveToEnd?.();
-        }, 100);
-      }
-    );
+    }>("apple-note-imported", (event) => {
+      const md = event.payload.markdown;
+      setContent(md);
+      onContentChange?.(md);
+      setTimeout(() => {
+        editorRef.current?.setContent(md);
+        editorRef.current?.focus();
+        editorRef.current?.moveToEnd?.();
+      }, 100);
+    });
 
     return () => {
       unlisten.then((fn) => fn());
@@ -457,7 +519,8 @@ export default function PostIt({
 
   const handleSaveAndClose = useCallback(async () => {
     const currentContent = getLiveContent();
-    const isTransientSlashQuery = !isSticked && isCaptureSlashQuery(currentContent);
+    const isTransientSlashQuery =
+      !isSticked && isCaptureSlashQuery(currentContent);
     if (isTransientSlashQuery || isMarkdownEffectivelyEmpty(currentContent)) {
       flushSync(() => {
         setContent("");
@@ -480,7 +543,9 @@ export default function PostIt({
       // can restore it when reopening the note in viewing mode.
       if (savedPath && pendingCursorRef.current) {
         const { head, anchor } = pendingCursorRef.current;
-        invoke("save_cursor_position", { id: savedPath, head, anchor }).catch(() => {});
+        invoke("save_cursor_position", { id: savedPath, head, anchor }).catch(
+          () => {},
+        );
       }
 
       setTimeout(async () => {
@@ -495,7 +560,14 @@ export default function PostIt({
       setIsSaving(false);
       setToast("Failed to save note");
     }
-  }, [isSticked, onSave, onClose, onContentChange, resolveFolderForAction, getLiveContent]);
+  }, [
+    isSticked,
+    onSave,
+    onClose,
+    onContentChange,
+    resolveFolderForAction,
+    getLiveContent,
+  ]);
 
   const showToast = useCallback((message: string) => {
     setToast(message);
@@ -554,9 +626,18 @@ export default function PostIt({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  // Note: handleSaveAndCloseSticked is intentionally omitted — it reads live
-  // content from the editor view ref, so a stale closure still saves correctly.
-  }, [showPicker, isSaving, isPinning, isSticked, isPinned, isCopyMenuOpen, vimEnabled, handleSaveAndClose]);
+    // Note: handleSaveAndCloseSticked is intentionally omitted — it reads live
+    // content from the editor view ref, so a stale closure still saves correctly.
+  }, [
+    showPicker,
+    isSaving,
+    isPinning,
+    isSticked,
+    isPinned,
+    isCopyMenuOpen,
+    vimEnabled,
+    handleSaveAndClose,
+  ]);
 
   // Zen mode shortcut (reads from settings, defaults to Cmd+.)
   useEffect(() => {
@@ -564,7 +645,9 @@ export default function PostIt({
     const handleZenToggle = (e: KeyboardEvent) => {
       const parts = shortcutStr.split("+");
       const key = parts[parts.length - 1];
-      const needsMeta = parts.some((p) => p === "Cmd" || p === "Command" || p === "Meta");
+      const needsMeta = parts.some(
+        (p) => p === "Cmd" || p === "Command" || p === "Meta",
+      );
       const needsShift = parts.some((p) => p === "Shift");
       const needsAlt = parts.some((p) => p === "Alt" || p === "Option");
       const needsCtrl = parts.some((p) => p === "Ctrl" || p === "Control");
@@ -575,7 +658,8 @@ export default function PostIt({
       if (needsCtrl !== e.ctrlKey) return;
 
       // Match the key portion
-      const eventKey = e.key === "." ? "Period" : e.key === "," ? "Comma" : e.key;
+      const eventKey =
+        e.key === "." ? "Period" : e.key === "," ? "Comma" : e.key;
       if (eventKey.toLowerCase() !== key.toLowerCase()) return;
 
       e.preventDefault();
@@ -603,7 +687,9 @@ export default function PostIt({
         e.preventDefault();
         setFontSize(newSize);
         invoke<StikSettings>("get_settings")
-          .then((s) => invoke("save_settings", { settings: { ...s, font_size: newSize } }))
+          .then((s) =>
+            invoke("save_settings", { settings: { ...s, font_size: newSize } }),
+          )
           .then(() => invoke<StikSettings>("get_settings"))
           .then((s) => getCurrentWindow().emit("settings-changed", s))
           .catch(() => {});
@@ -620,7 +706,10 @@ export default function PostIt({
     if (!isCopyMenuOpen) return;
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (copyMenuRef.current && !copyMenuRef.current.contains(event.target as Node)) {
+      if (
+        copyMenuRef.current &&
+        !copyMenuRef.current.contains(event.target as Node)
+      ) {
         setIsCopyMenuOpen(false);
       }
     };
@@ -645,89 +734,107 @@ export default function PostIt({
     return copied;
   }, []);
 
-  const copyPlainText = useCallback(async (plainText: string): Promise<boolean> => {
-    if (copyPlainTextViaTextarea(plainText)) {
-      return true;
-    }
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-      await navigator.clipboard.writeText(plainText);
-      return true;
-    }
-    return false;
-  }, [copyPlainTextViaTextarea]);
+  const copyPlainText = useCallback(
+    async (plainText: string): Promise<boolean> => {
+      if (copyPlainTextViaTextarea(plainText)) {
+        return true;
+      }
+      if (
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === "function"
+      ) {
+        await navigator.clipboard.writeText(plainText);
+        return true;
+      }
+      return false;
+    },
+    [copyPlainTextViaTextarea],
+  );
 
-  const handleCopy = useCallback(async (mode: CopyMode) => {
-    if (isCopying) return;
-    if (isMarkdownEffectivelyEmpty(content)) {
-      setIsCopyMenuOpen(false);
-      showToast("Nothing to copy");
-      return;
-    }
+  const handleCopy = useCallback(
+    async (mode: CopyMode) => {
+      if (isCopying) return;
+      if (isMarkdownEffectivelyEmpty(content)) {
+        setIsCopyMenuOpen(false);
+        showToast("Nothing to copy");
+        return;
+      }
 
-    flushSync(() => {
-      setIsCopying(true);
-      setCopyMode(mode);
-      setIsCopyMenuOpen(false);
-    });
+      flushSync(() => {
+        setIsCopying(true);
+        setCopyMode(mode);
+        setIsCopyMenuOpen(false);
+      });
 
-    try {
-      if (mode === "rich") {
-        const htmlText = editorRef.current?.getHTML()?.trim() || fallbackHtmlFromPlainText(content);
-        const plainText = markdownToPlainText(
-          editorRef.current?.getText()?.trim() || content,
-        );
+      try {
+        if (mode === "rich") {
+          const htmlText =
+            editorRef.current?.getHTML()?.trim() ||
+            fallbackHtmlFromPlainText(content);
+          const plainText = markdownToPlainText(
+            editorRef.current?.getText()?.trim() || content,
+          );
 
-        // Write directly to native macOS clipboard via Rust/arboard.
-        // Browser clipboard APIs (ClipboardItem, execCommand) are unreliable
-        // in Tauri's WKWebView — HTML MIME type often doesn't land.
-        await invoke("copy_rich_text_to_clipboard", {
-          html: htmlText,
-          plainText,
-        });
-
-        showToast("Copied as rich text");
-      } else if (mode === "markdown") {
-        const markdownText = normalizeMarkdownForCopy(content);
-        const copied = await copyPlainText(markdownText);
-        if (!copied) {
-          throw new Error("Markdown copy failed in all available methods");
-        }
-        showToast("Copied as markdown");
-      } else {
-        const activeElement = document.activeElement as HTMLElement | null;
-        const shouldRestoreEditorFocus = !!activeElement?.closest(".stik-editor");
-
-        if (shouldRestoreEditorFocus) {
-          editorRef.current?.blur();
-        }
-
-        // Hide chrome (header, footer, toolbar) so the screenshot is content-only
-        document.documentElement.classList.add("capturing-image");
-        try {
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          // Write directly to native macOS clipboard via Rust/arboard.
+          // Browser clipboard APIs (ClipboardItem, execCommand) are unreliable
+          // in Tauri's WKWebView — HTML MIME type often doesn't land.
+          await invoke("copy_rich_text_to_clipboard", {
+            html: htmlText,
+            plainText,
           });
-          await invoke("copy_visible_note_image_to_clipboard");
-          showToast("Copied as image");
-        } finally {
-          document.documentElement.classList.remove("capturing-image");
+
+          showToast("Copied as rich text");
+        } else if (mode === "markdown") {
+          const markdownText = normalizeMarkdownForCopy(content);
+          const copied = await copyPlainText(markdownText);
+          if (!copied) {
+            throw new Error("Markdown copy failed in all available methods");
+          }
+          showToast("Copied as markdown");
+        } else {
+          const activeElement = document.activeElement as HTMLElement | null;
+          const shouldRestoreEditorFocus =
+            !!activeElement?.closest(".stik-editor");
+
           if (shouldRestoreEditorFocus) {
-            editorRef.current?.focus();
+            editorRef.current?.blur();
+          }
+
+          // Hide chrome (header, footer, toolbar) so the screenshot is content-only
+          document.documentElement.classList.add("capturing-image");
+          try {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => resolve()),
+              );
+            });
+            await invoke("copy_visible_note_image_to_clipboard");
+            showToast("Copied as image");
+          } finally {
+            document.documentElement.classList.remove("capturing-image");
+            if (shouldRestoreEditorFocus) {
+              editorRef.current?.focus();
+            }
           }
         }
+      } catch (error) {
+        console.error("Failed to copy note:", error);
+        if (
+          mode === "image" &&
+          error instanceof Error &&
+          error.message.includes("not supported")
+        ) {
+          showToast("Image copy is not supported here");
+        } else {
+          showToast("Copy failed");
+        }
+      } finally {
+        setIsCopying(false);
+        setCopyMode(null);
       }
-    } catch (error) {
-      console.error("Failed to copy note:", error);
-      if (mode === "image" && error instanceof Error && error.message.includes("not supported")) {
-        showToast("Image copy is not supported here");
-      } else {
-        showToast("Copy failed");
-      }
-    } finally {
-      setIsCopying(false);
-      setCopyMode(null);
-    }
-  }, [content, folder, isCopying, copyPlainText, showToast]);
+    },
+    [content, folder, isCopying, copyPlainText, showToast],
+  );
 
   const hasMeaningfulContent = !isMarkdownEffectivelyEmpty(content);
   const hasValidFolder = folder.trim().length > 0;
@@ -852,7 +959,11 @@ export default function PostIt({
         // Save cursor position under the file path so Cmd+Shift+L restores it.
         if (savedNotePath && pendingCursorRef.current) {
           const { head, anchor } = pendingCursorRef.current;
-          invoke("save_cursor_position", { id: savedNotePath, head, anchor }).catch(() => {});
+          invoke("save_cursor_position", {
+            id: savedNotePath,
+            head,
+            anchor,
+          }).catch(() => {});
         }
         // Wait for save animation before closing
         setTimeout(async () => {
@@ -896,48 +1007,51 @@ export default function PostIt({
     }
   }, [stickedId, currentStickedId, isPinned]);
 
-  const handleContentChange = useCallback((newContent: string) => {
-    const stored = unresolveImagePaths(newContent);
-    setContent(stored);
-    contentRef.current = stored;
-    onContentChange?.(stored);
+  const handleContentChange = useCallback(
+    (newContent: string) => {
+      const stored = unresolveImagePaths(newContent);
+      setContent(stored);
+      contentRef.current = stored;
+      onContentChange?.(stored);
 
-    // Check for folder picker trigger (only in capture mode).
-    // Slash commands take priority. Only show folder picker when the typed
-    // prefix doesn't match any command AND matches at least one folder name.
-    if (!isSticked) {
-      if (isCaptureSlashQuery(newContent)) {
-        const query = newContent.slice(1).toLowerCase();
-        const matchesSlashCmd =
-          query === "" ||
-          getSlashCommandNames().some((cmd) => cmd.startsWith(query));
-        const matchesFolder =
-          query.length > 0 &&
-          foldersRef.current.some((f) => f.toLowerCase().includes(query));
-        setShowPicker(!matchesSlashCmd && matchesFolder);
+      // Check for folder picker trigger (only in capture mode).
+      // Slash commands take priority. Only show folder picker when the typed
+      // prefix doesn't match any command AND matches at least one folder name.
+      if (!isSticked) {
+        if (isCaptureSlashQuery(newContent)) {
+          const query = newContent.slice(1).toLowerCase();
+          const matchesSlashCmd =
+            query === "" ||
+            getSlashCommandNames().some((cmd) => cmd.startsWith(query));
+          const matchesFolder =
+            query.length > 0 &&
+            foldersRef.current.some((f) => f.toLowerCase().includes(query));
+          setShowPicker(!matchesSlashCmd && matchesFolder);
 
-        // Ensure CM6 autocomplete activates for slash commands.
-        // After a close+clear+reopen cycle, CM6's "explicitly closed" state
-        // can prevent activateOnTyping from reopening the panel. Explicitly
-        // triggering startCompletion is deterministic and harmless if the
-        // panel is already open.
-        if (matchesSlashCmd) {
-          setTimeout(() => {
-            const view = editorRef.current?.getView();
-            if (!view || completionStatus(view.state)) return;
-            // Guard: verify editor still has slash content (another handler
-            // could have cleared it between scheduling and execution).
-            const doc = view.state.doc.toString();
-            if (doc.startsWith("/")) {
-              startCompletion(view);
-            }
-          }, 0);
+          // Ensure CM6 autocomplete activates for slash commands.
+          // After a close+clear+reopen cycle, CM6's "explicitly closed" state
+          // can prevent activateOnTyping from reopening the panel. Explicitly
+          // triggering startCompletion is deterministic and harmless if the
+          // panel is already open.
+          if (matchesSlashCmd) {
+            setTimeout(() => {
+              const view = editorRef.current?.getView();
+              if (!view || completionStatus(view.state)) return;
+              // Guard: verify editor still has slash content (another handler
+              // could have cleared it between scheduling and execution).
+              const doc = view.state.doc.toString();
+              if (doc.startsWith("/")) {
+                startCompletion(view);
+              }
+            }, 0);
+          }
+        } else {
+          setShowPicker(false);
         }
-      } else {
-        setShowPicker(false);
       }
-    }
-  }, [isSticked]);
+    },
+    [isSticked],
+  );
 
   // --- Vim command bar ---
   const dismissCommandBar = useCallback(() => {
@@ -960,7 +1074,14 @@ export default function PostIt({
     } else {
       void onClose();
     }
-  }, [isSticked, handleSaveAndCloseSticked, handleSaveAndClose, handleCloseWithoutSaving, onClose, getLiveContent]);
+  }, [
+    isSticked,
+    handleSaveAndCloseSticked,
+    handleSaveAndClose,
+    handleCloseWithoutSaving,
+    onClose,
+    getLiveContent,
+  ]);
 
   const runVimDiscardAndClose = useCallback(() => {
     setContent("");
@@ -979,25 +1100,28 @@ export default function PostIt({
     }
   }, [isSticked, handleCloseWithoutSaving, onClose, onContentChange]);
 
-  const executeVimCommand = useCallback((cmd: string) => {
-    const trimmed = cmd.trim();
+  const executeVimCommand = useCallback(
+    (cmd: string) => {
+      const trimmed = cmd.trim();
 
-    switch (trimmed) {
-      case "wq":
-      case "x": // save and close
-        runVimSaveAndClose();
-        break;
-      case "q!": // discard and close (no save)
-        runVimDiscardAndClose();
-        break;
-      default:
-        setVimCommandError(`Not a command: ${trimmed}`);
-        return; // don't dismiss
-    }
+      switch (trimmed) {
+        case "wq":
+        case "x": // save and close
+          runVimSaveAndClose();
+          break;
+        case "q!": // discard and close (no save)
+          runVimDiscardAndClose();
+          break;
+        default:
+          setVimCommandError(`Not a command: ${trimmed}`);
+          return; // don't dismiss
+      }
 
-    setVimCommand("");
-    setVimCommandError("");
-  }, [runVimSaveAndClose, runVimDiscardAndClose]);
+      setVimCommand("");
+      setVimCommandError("");
+    },
+    [runVimSaveAndClose, runVimDiscardAndClose],
+  );
 
   // Focus command input when command mode opens
   useEffect(() => {
@@ -1041,7 +1165,8 @@ export default function PostIt({
     };
 
     window.addEventListener("keydown", handleVimCommandTrigger, true);
-    return () => window.removeEventListener("keydown", handleVimCommandTrigger, true);
+    return () =>
+      window.removeEventListener("keydown", handleVimCommandTrigger, true);
   }, [vimEnabled, vimMode]);
 
   const handleFolderSelect = useCallback(
@@ -1060,7 +1185,7 @@ export default function PostIt({
 
       editorRef.current?.focus();
     },
-    [onFolderChange, content, onContentChange]
+    [onFolderChange, content, onContentChange],
   );
 
   const startDrag = useCallback(async (e: React.MouseEvent) => {
@@ -1122,15 +1247,23 @@ export default function PostIt({
     // onMoved fires when the OS completes a window drag (startDragging()
     // bypasses the webview, so mouseup alone never fires after a drag)
     let unlistenMoved: (() => void) | undefined;
-    getCurrentWindow().onMoved(() => {
-      debounced();
-    }).then((fn) => { unlistenMoved = fn; });
+    getCurrentWindow()
+      .onMoved(() => {
+        debounced();
+      })
+      .then((fn) => {
+        unlistenMoved = fn;
+      });
 
     // onResized catches native OS resize handle events
     let unlistenResize: (() => void) | undefined;
-    getCurrentWindow().onResized(() => {
-      debounced();
-    }).then((fn) => { unlistenResize = fn; });
+    getCurrentWindow()
+      .onResized(() => {
+        debounced();
+      })
+      .then((fn) => {
+        unlistenResize = fn;
+      });
 
     return () => {
       window.removeEventListener("mouseup", debounced);
@@ -1173,10 +1306,16 @@ export default function PostIt({
       timeout = setTimeout(saveCapture, 500);
     };
 
-    getCurrentWindow().onResized(() => debounced())
-      .then((fn) => { unlistenResize = fn; });
-    getCurrentWindow().onMoved(() => debounced())
-      .then((fn) => { unlistenMoved = fn; });
+    getCurrentWindow()
+      .onResized(() => debounced())
+      .then((fn) => {
+        unlistenResize = fn;
+      });
+    getCurrentWindow()
+      .onMoved(() => debounced())
+      .then((fn) => {
+        unlistenMoved = fn;
+      });
 
     return () => {
       unlistenResize?.();
@@ -1234,58 +1373,70 @@ export default function PostIt({
   }, [folder]);
 
   // Handle wiki-link click: open the referenced note for viewing
-  const handleWikiLinkClick = useCallback(async (_slug: string, path: string) => {
-    if (!path) return;
-    try {
-      const noteContent = await invoke<string>("get_note_content", { path });
-      // Extract folder from path: ~/Documents/Stik/<folder>/<file>.md
-      const parts = path.split("/");
-      const noteFolder = parts[parts.length - 2] || folder;
-      await invoke("open_note_for_viewing", {
-        content: noteContent,
-        folder: noteFolder,
-        path,
-      });
-    } catch (error) {
-      console.error("Failed to open wiki-linked note:", error);
-    }
-  }, [folder]);
+  const handleWikiLinkClick = useCallback(
+    async (_slug: string, path: string) => {
+      if (!path) return;
+      try {
+        const noteContent = await invoke<string>("get_note_content", { path });
+        // Extract folder from path: ~/Documents/Stik/<folder>/<file>.md
+        const parts = path.split("/");
+        const noteFolder = parts[parts.length - 2] || folder;
+        await invoke("open_note_for_viewing", {
+          content: noteContent,
+          folder: noteFolder,
+          path,
+        });
+      } catch (error) {
+        console.error("Failed to open wiki-linked note:", error);
+      }
+    },
+    [folder],
+  );
 
   // Handle image paste/drop: save to disk and return asset URL for the editor
-  const handleImagePaste = useCallback(async (file: File): Promise<string | null> => {
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+  const handleImagePaste = useCallback(
+    async (file: File): Promise<string | null> => {
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
 
-      const [absPath] = await invoke<[string, string]>("save_note_image", {
-        folder,
-        imageData: base64,
-      });
+        const [absPath] = await invoke<[string, string]>("save_note_image", {
+          folder,
+          imageData: base64,
+        });
 
-      return convertFileSrc(absPath);
-    } catch (err) {
-      console.error("Failed to save image:", err);
-      return null;
-    }
-  }, [folder]);
+        return convertFileSrc(absPath);
+      } catch (err) {
+        console.error("Failed to save image:", err);
+        return null;
+      }
+    },
+    [folder],
+  );
 
-  const handleImageDropPath = useCallback(async (path: string): Promise<string | null> => {
-    try {
-      const [absPath] = await invoke<[string, string]>("save_note_image_from_path", {
-        folder,
-        filePath: path,
-      });
+  const handleImageDropPath = useCallback(
+    async (path: string): Promise<string | null> => {
+      try {
+        const [absPath] = await invoke<[string, string]>(
+          "save_note_image_from_path",
+          {
+            folder,
+            filePath: path,
+          },
+        );
 
-      return convertFileSrc(absPath);
-    } catch (err) {
-      console.error("Failed to import dropped image:", err);
-      return null;
-    }
-  }, [folder]);
+        return convertFileSrc(absPath);
+      } catch (err) {
+        console.error("Failed to import dropped image:", err);
+        return null;
+      }
+    },
+    [folder],
+  );
 
   // Show save animation
   if (isSaving) {
@@ -1331,376 +1482,454 @@ export default function PostIt({
         } ${zenMode ? "zen-mode" : ""}`}
         style={{ backgroundColor: `rgb(var(--color-bg) / ${windowOpacity})` }}
       >
-      {/* Header - draggable */}
-      <div
-        onMouseDown={startDrag}
-        className={`flex items-center justify-between px-4 py-2.5 border-b border-line drag-handle ${
-          isSticked && isPinned ? "sticked-header" : ""
-        }`}
-      >
-        {!zenMode && (
-          <>
-            <div className="flex items-center gap-2">
-              {/* Pin button */}
-              {!isSticked ? (
-                // Capture mode: pin to create sticked note
-                <button
-                  data-capture-hide
-                  onClick={handlePin}
-                  disabled={!hasMeaningfulContent || isPinning}
-                  className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                    hasMeaningfulContent
-                      ? "hover:bg-coral-light text-coral hover:text-coral"
-                      : "text-stone/50 cursor-not-allowed"
-                  }`}
-                  title="Pin to screen"
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+        {/* Header - draggable */}
+        <div
+          onMouseDown={startDrag}
+          className={`flex items-center justify-between px-4 py-2.5 border-b border-line drag-handle ${
+            isSticked && isPinned ? "sticked-header" : ""
+          }`}
+        >
+          {!zenMode && (
+            <>
+              <div className="flex items-center gap-2">
+                {/* Pin button */}
+                {!isSticked ? (
+                  // Capture mode: pin to create sticked note
+                  <button
+                    data-capture-hide
+                    onClick={handlePin}
+                    disabled={!hasMeaningfulContent || isPinning}
+                    className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                      hasMeaningfulContent
+                        ? "hover:bg-coral-light text-coral hover:text-coral"
+                        : "text-stone/50 cursor-not-allowed"
+                    }`}
+                    title="Pin to screen"
                   >
-                    <line x1="12" y1="17" x2="12" y2="22" />
-                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                  </svg>
-                </button>
-              ) : (
-                // Sticked mode: toggle pin state
-                <button
-                  data-capture-hide
-                  onClick={handleTogglePin}
-                  className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                    isPinned
-                      ? "text-coral hover:bg-coral-light"
-                      : "text-stone hover:bg-line hover:text-coral"
-                  }`}
-                  title={isPinned ? "Unpin (won't restore on restart)" : "Pin (will restore on restart)"}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill={isPinned ? "currentColor" : "none"}
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" y1="17" x2="12" y2="22" />
+                      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                    </svg>
+                  </button>
+                ) : (
+                  // Sticked mode: toggle pin state
+                  <button
+                    data-capture-hide
+                    onClick={handleTogglePin}
+                    className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                      isPinned
+                        ? "text-coral hover:bg-coral-light"
+                        : "text-stone hover:bg-line hover:text-coral"
+                    }`}
+                    title={
+                      isPinned
+                        ? "Unpin (won't restore on restart)"
+                        : "Pin (will restore on restart)"
+                    }
                   >
-                    <line x1="12" y1="17" x2="12" y2="22" />
-                    <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
-                  </svg>
-                </button>
-              )}
-
-              <button
-                onClick={() => setShowPicker(!showPicker)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-pill text-[11px] font-semibold transition-colors hover:opacity-80 ${
-                  hasValidFolder
-                    ? `${getFolderColor(folder, folderColors).badgeBg} ${getFolderColor(folder, folderColors).badgeText}`
-                    : "bg-line text-stone"
-                }`}
-              >
-                <span className="text-[8px]" style={{ color: getFolderColor(folder, folderColors).dot }}>●</span>
-                <span>{folder || "Stik"}</span>
-                <span className="text-[8px] opacity-50">▼</span>
-              </button>
-
-              {suggestedFolder && (
-                <button
-                  data-capture-hide
-                  onClick={() => {
-                    onFolderChange(suggestedFolder);
-                    setSuggestedFolder(null);
-                  }}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded-pill text-[10px] font-medium bg-coral/10 text-coral hover:bg-coral/20 transition-colors"
-                >
-                  <span>→</span>
-                  <span>{suggestedFolder}?</span>
-                </button>
-              )}
-            </div>
-
-            <div data-capture-hide className="flex items-center gap-3 text-[10px] text-stone">
-              <div className="relative" ref={copyMenuRef}>
-                {!(isCopying && copyMode === "image") && (
-                <button
-                  onClick={() => setIsCopyMenuOpen((open) => !open)}
-                  className={`p-1 rounded-md transition-colors ${
-                    isCopyMenuOpen
-                      ? "text-coral bg-coral-light"
-                      : "text-stone hover:bg-line hover:text-ink"
-                  }`}
-                  title="Actions"
-                >
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <circle cx="7" cy="3" r="1.2" fill="currentColor" />
-                    <circle cx="7" cy="7" r="1.2" fill="currentColor" />
-                    <circle cx="7" cy="11" r="1.2" fill="currentColor" />
-                  </svg>
-                </button>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill={isPinned ? "currentColor" : "none"}
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <line x1="12" y1="17" x2="12" y2="22" />
+                      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z" />
+                    </svg>
+                  </button>
                 )}
 
-                {isCopyMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-40 rounded-lg border border-line bg-bg shadow-stik overflow-hidden z-[240]">
+                <button
+                  onClick={() => setShowPicker(!showPicker)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-pill text-[11px] font-semibold transition-colors hover:opacity-80 ${
+                    hasValidFolder
+                      ? `${getFolderColor(folder, folderColors).badgeBg} ${getFolderColor(folder, folderColors).badgeText}`
+                      : "bg-line text-stone"
+                  }`}
+                >
+                  <span
+                    className="text-[8px]"
+                    style={{ color: getFolderColor(folder, folderColors).dot }}
+                  >
+                    ●
+                  </span>
+                  <span>{folder || "Stik"}</span>
+                  <span className="text-[8px] opacity-50">▼</span>
+                </button>
+
+                {suggestedFolder && (
+                  <button
+                    data-capture-hide
+                    onClick={() => {
+                      onFolderChange(suggestedFolder);
+                      setSuggestedFolder(null);
+                    }}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-pill text-[10px] font-medium bg-coral/10 text-coral hover:bg-coral/20 transition-colors"
+                  >
+                    <span>→</span>
+                    <span>{suggestedFolder}?</span>
+                  </button>
+                )}
+              </div>
+
+              <div
+                data-capture-hide
+                className="flex items-center gap-3 text-[10px] text-stone"
+              >
+                <div className="relative" ref={copyMenuRef}>
+                  {!(isCopying && copyMode === "image") && (
                     <button
-                      onClick={() => void handleCopy("rich")}
-                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      onClick={() => setIsCopyMenuOpen((open) => !open)}
+                      className={`p-1 rounded-md transition-colors ${
+                        isCopyMenuOpen
+                          ? "text-coral bg-coral-light"
+                          : "text-stone hover:bg-line hover:text-ink"
+                      }`}
+                      title="Actions"
                     >
-                      Copy as rich text
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 14 14"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <circle cx="7" cy="3" r="1.2" fill="currentColor" />
+                        <circle cx="7" cy="7" r="1.2" fill="currentColor" />
+                        <circle cx="7" cy="11" r="1.2" fill="currentColor" />
+                      </svg>
+                    </button>
+                  )}
+
+                  {isCopyMenuOpen && (
+                    <div className="absolute top-full right-0 mt-1 w-40 rounded-lg border border-line bg-bg shadow-stik overflow-hidden z-[240]">
+                      <button
+                        onClick={() => void handleCopy("rich")}
+                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      >
+                        Copy as rich text
+                      </button>
+                      <button
+                        onClick={() => void handleCopy("markdown")}
+                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      >
+                        Copy as markdown
+                      </button>
+                      <button
+                        onClick={() => void handleCopy("image")}
+                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      >
+                        Copy as image
+                      </button>
+                      <div className="border-t border-line" />
+                      <button
+                        onClick={async () => {
+                          setIsCopyMenuOpen(false);
+                          try {
+                            await invoke("show_apple_notes_picker_cmd");
+                          } catch (err) {
+                            console.error(
+                              "Failed to open Apple Notes picker:",
+                              err,
+                            );
+                          }
+                        }}
+                        className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      >
+                        Import from Apple Notes
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <AiMenu
+                  content={content}
+                  folder={folder}
+                  onApplyText={(text) => {
+                    editorRef.current?.setContent(text);
+                    setContent(text);
+                  }}
+                  onShowToast={(msg) => setToast(msg)}
+                  disabled={!hasMeaningfulContent}
+                />
+
+                {isSticked && isPinned ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={handleCloseWithoutSaving}
+                      className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
+                      title="Close without saving"
+                    >
+                      Close
                     </button>
                     <button
-                      onClick={() => void handleCopy("markdown")}
-                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
+                      onClick={handleSaveAndCloseSticked}
+                      disabled={!hasMeaningfulContent}
+                      className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
+                        hasMeaningfulContent
+                          ? "bg-coral text-white hover:bg-coral/90"
+                          : "bg-line text-stone cursor-not-allowed"
+                      }`}
+                      title={
+                        hasMeaningfulContent
+                          ? "Save to folder and close"
+                          : "Nothing to save"
+                      }
                     >
-                      Copy as markdown
-                    </button>
-                    <button
-                      onClick={() => void handleCopy("image")}
-                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                    >
-                      Copy as image
-                    </button>
-                    <div className="border-t border-line" />
-                    <button
-                      onClick={async () => {
-                        setIsCopyMenuOpen(false);
-                        try {
-                          await invoke("show_apple_notes_picker_cmd");
-                        } catch (err) {
-                          console.error("Failed to open Apple Notes picker:", err);
-                        }
-                      }}
-                      className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-line/50 transition-colors"
-                    >
-                      Import from Apple Notes
+                      Save
                     </button>
                   </div>
-                )}
-              </div>
-
-              <AiMenu
-                content={content}
-                folder={folder}
-                onApplyText={(text) => {
-                  editorRef.current?.setContent(text);
-                  setContent(text);
-                }}
-                onShowToast={(msg) => setToast(msg)}
-                disabled={!hasMeaningfulContent}
-              />
-
-              {isSticked && isPinned ? (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={handleCloseWithoutSaving}
-                    className="px-2 py-1 rounded-md hover:bg-line text-stone hover:text-ink transition-colors text-[10px]"
-                    title="Close without saving"
-                  >
-                    Close
-                  </button>
+                ) : isSticked ? (
                   <button
                     onClick={handleSaveAndCloseSticked}
-                    disabled={!hasMeaningfulContent}
-                    className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
-                      hasMeaningfulContent
-                        ? "bg-coral text-white hover:bg-coral/90"
-                        : "bg-line text-stone cursor-not-allowed"
-                    }`}
-                    title={hasMeaningfulContent ? "Save to folder and close" : "Nothing to save"}
+                    className="px-2.5 py-1.5 bg-coral-light text-coral rounded-lg text-[10px] font-semibold hover:bg-coral hover:text-white transition-colors cursor-pointer"
+                    title="Save and close (Esc)"
                   >
-                    Save
+                    esc
                   </button>
-                </div>
-              ) : isSticked ? (
-                <button
-                  onClick={handleSaveAndCloseSticked}
-                  className="px-2.5 py-1.5 bg-coral-light text-coral rounded-lg text-[10px] font-semibold hover:bg-coral hover:text-white transition-colors cursor-pointer"
-                  title="Save and close (Esc)"
-                >
-                  esc
-                </button>
-              ) : (
-                <button
-                  onClick={handleSaveAndClose}
-                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors bg-coral-light text-coral hover:bg-coral hover:text-white cursor-pointer"
-                  title="Save and close (Esc)"
-                >
-                  esc
-                </button>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Editor */}
-      <div
-        className="flex-1 relative overflow-hidden min-h-0"
-        style={{ '--editor-font-size': `${fontSize}px` } as React.CSSProperties}
-      >
-        {vimEnabled === null ? (
-          <div className="h-full" /> // placeholder while settings load
-        ) : shouldWaitForNotesDir ? (
-          <div className="h-full" /> // wait for notes dir to resolve .assets image paths
-        ) : (
-          <Editor
-            key={`${vimEnabled ? "vim" : "novim"}-${textDirection}`}
-            ref={editorRef}
-            onChange={handleContentChange}
-            placeholder={isSticked ? "Sticked note..." : "Type a thought..."}
-            initialContent={resolvedInitialContent || initialContent}
-            vimEnabled={vimEnabled}
-            showFormatToolbar={zenMode ? false : formatToolbar}
-            textDirection={textDirection}
-            onVimModeChange={setVimMode}
-            onVimSaveAndClose={runVimSaveAndClose}
-            onVimCloseWithoutSaving={runVimDiscardAndClose}
-            onImagePaste={handleImagePaste}
-            onImageDropPath={handleImageDropPath}
-            onWikiLinkClick={handleWikiLinkClick}
-            onCursorChange={handleCursorChange}
-          />
-        )}
-
-        {/* Folder Picker */}
-        {showPicker && !zenMode && (
-          <FolderPicker
-            query={content.startsWith("/") ? content.slice(1) : ""}
-            onSelect={handleFolderSelect}
-            onClose={() => {
-              setShowPicker(false);
-              editorRef.current?.focus();
-            }}
-            folderColors={folderColors}
-          />
-        )}
-      </div>
-
-      {/* Footer - draggable (or command bar when vim command mode) */}
-      {/* Vim command bar always renders when active (even in zen mode) */}
-      {(!zenMode || (vimEnabled && vimMode === "command")) && (
-        vimEnabled && vimMode === "command" ? (
-          <div data-capture-hide className="flex flex-col border-t border-line">
-            {/* entire vim command bar hidden during capture */}
-            {vimCommandError && (
-              <div className="px-4 py-1 text-[11px] text-coral bg-coral-light/30">
-                {vimCommandError}
+                ) : (
+                  <button
+                    onClick={handleSaveAndClose}
+                    className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-colors bg-coral-light text-coral hover:bg-coral hover:text-white cursor-pointer"
+                    title="Save and close (Esc)"
+                  >
+                    esc
+                  </button>
+                )}
               </div>
-            )}
-            <div className="flex items-center px-4 py-1.5 bg-ink/5">
-              <span className="text-[13px] font-mono text-coral font-bold mr-0.5">:</span>
-              <input
-                ref={commandInputRef}
-                type="text"
-                value={vimCommand}
-                onChange={(e) => {
-                  setVimCommand(e.target.value);
-                  setVimCommandError("");
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    executeVimCommand(vimCommand);
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    dismissCommandBar();
-                  } else if (e.key === "Backspace" && !vimCommand) {
-                    e.preventDefault();
-                    dismissCommandBar();
-                  }
-                }}
-                className="flex-1 bg-transparent text-[13px] font-mono text-ink outline-none placeholder:text-stone/50"
-                placeholder="wq  q!"
-                spellCheck={false}
-                autoComplete="off"
-              />
+            </>
+          )}
+        </div>
+
+        {/* Editor */}
+        <div
+          className="flex-1 relative overflow-hidden min-h-0"
+          style={
+            { "--editor-font-size": `${fontSize}px` } as React.CSSProperties
+          }
+        >
+          {vimEnabled === null ? (
+            <div className="h-full" /> // placeholder while settings load
+          ) : shouldWaitForNotesDir ? (
+            <div className="h-full" /> // wait for notes dir to resolve .assets image paths
+          ) : (
+            <Editor
+              key={`${vimEnabled ? "vim" : "novim"}-${textDirection}`}
+              ref={editorRef}
+              onChange={handleContentChange}
+              placeholder={isSticked ? "Sticked note..." : "Type a thought..."}
+              initialContent={resolvedInitialContent || initialContent}
+              vimEnabled={vimEnabled}
+              showFormatToolbar={zenMode ? false : formatToolbar}
+              textDirection={textDirection}
+              onVimModeChange={setVimMode}
+              onVimSaveAndClose={runVimSaveAndClose}
+              onVimCloseWithoutSaving={runVimDiscardAndClose}
+              onImagePaste={handleImagePaste}
+              onImageDropPath={handleImageDropPath}
+              onWikiLinkClick={handleWikiLinkClick}
+              onCursorChange={handleCursorChange}
+            />
+          )}
+
+          {/* Folder Picker */}
+          {showPicker && !zenMode && (
+            <FolderPicker
+              query={content.startsWith("/") ? content.slice(1) : ""}
+              onSelect={handleFolderSelect}
+              onClose={() => {
+                setShowPicker(false);
+                editorRef.current?.focus();
+              }}
+              folderColors={folderColors}
+            />
+          )}
+        </div>
+
+        {/* Footer - draggable (or command bar when vim command mode) */}
+        {/* Vim command bar always renders when active (even in zen mode) */}
+        {(!zenMode || (vimEnabled && vimMode === "command")) &&
+          (vimEnabled && vimMode === "command" ? (
+            <div
+              data-capture-hide
+              className="flex flex-col border-t border-line"
+            >
+              {/* entire vim command bar hidden during capture */}
+              {vimCommandError && (
+                <div className="px-4 py-1 text-[11px] text-coral bg-coral-light/30">
+                  {vimCommandError}
+                </div>
+              )}
+              <div className="flex items-center px-4 py-1.5 bg-ink/5">
+                <span className="text-[13px] font-mono text-coral font-bold mr-0.5">
+                  :
+                </span>
+                <input
+                  ref={commandInputRef}
+                  type="text"
+                  value={vimCommand}
+                  onChange={(e) => {
+                    setVimCommand(e.target.value);
+                    setVimCommandError("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      executeVimCommand(vimCommand);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      dismissCommandBar();
+                    } else if (e.key === "Backspace" && !vimCommand) {
+                      e.preventDefault();
+                      dismissCommandBar();
+                    }
+                  }}
+                  className="flex-1 bg-transparent text-[13px] font-mono text-ink outline-none placeholder:text-stone/50"
+                  placeholder="wq  q!"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </div>
             </div>
-          </div>
-        ) : (
-          <div
-            onMouseDown={startDrag}
-            className="flex items-center justify-between px-4 py-2 border-t border-line text-[10px] drag-handle"
-          >
-            <span className="font-mono text-stone">
-              <span className="text-coral">~</span>/Stik/
-              {folder && <><span className="text-coral">{folder}</span>/</>}
-            </span>
-            <div className="flex items-center gap-2">
-              {vimEnabled ? (
-                <span className="vim-mode-indicator text-stone">
-                  {vimMode === "normal" ? (
-                    <span className="text-coral">-- NORMAL --</span>
-                  ) : vimMode === "visual" ? (
-                    <span className="text-amber-500">-- VISUAL --</span>
-                  ) : vimMode === "visual-line" ? (
-                    <span className="text-amber-500">-- VISUAL LINE --</span>
-                  ) : (
-                    <span className="text-green-600">-- INSERT --</span>
+          ) : (
+            <div
+              onMouseDown={startDrag}
+              className="flex items-center justify-between px-4 py-2 border-t border-line text-[10px] drag-handle"
+            >
+              <span className="flex items-center gap-2 font-mono text-stone">
+                <span>
+                  <span className="text-coral">~</span>/Stik/
+                  {folder && (
+                    <>
+                      <span className="text-coral">{folder}</span>/
+                    </>
                   )}
                 </span>
-              ) : isSticked && !isPinned && !isViewing ? (
-                <span className="text-stone">
-                  <span className="text-amber-500">○</span> unpinned
-                </span>
-              ) : (
-                <span className="text-stone">
-                  <span className="text-coral">✦</span> markdown supported
-                </span>
-              )}
-              {(onOpenSettings || isSticked) && (<span data-capture-hide className="contents">
-                {!vimEnabled && (
-                <button
-                  onClick={() => {
-                    const next = !formatToolbar;
-                    setFormatToolbar(next);
-                    try { localStorage.setItem("stik:format-toolbar", next ? "1" : "0"); } catch {}
-                  }}
-                  className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
-                    formatToolbar
-                      ? "text-coral hover:bg-coral-light"
-                      : "text-stone hover:bg-line hover:text-ink"
-                  }`}
-                  title={formatToolbar ? "Hide format buttons" : "Show format buttons"}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4 7V4h16v3" />
-                    <path d="M9 20h6" />
-                    <path d="M12 4v16" />
-                  </svg>
-                </button>
+                <SyncIndicator enabled={icloudEnabled} />
+              </span>
+              <div className="flex items-center gap-2">
+                {vimEnabled ? (
+                  <span className="vim-mode-indicator text-stone">
+                    {vimMode === "normal" ? (
+                      <span className="text-coral">-- NORMAL --</span>
+                    ) : vimMode === "visual" ? (
+                      <span className="text-amber-500">-- VISUAL --</span>
+                    ) : vimMode === "visual-line" ? (
+                      <span className="text-amber-500">-- VISUAL LINE --</span>
+                    ) : (
+                      <span className="text-green-600">-- INSERT --</span>
+                    )}
+                  </span>
+                ) : isSticked && !isPinned && !isViewing ? (
+                  <span className="text-stone">
+                    <span className="text-amber-500">○</span> unpinned
+                  </span>
+                ) : (
+                  <span className="text-stone">
+                    <span className="text-coral">✦</span> markdown supported
+                  </span>
                 )}
-                <button
-                  onClick={() => invoke("open_command_palette")}
-                  className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                  title={`Command Palette (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="11" cy="11" r="8"/>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                  </svg>
-                </button>
-                <button
-                  onClick={() => isSticked ? invoke("open_settings") : onOpenSettings?.()}
-                  className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
-                  title={`Settings (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                  </svg>
-                </button>
-              </span>)}
+                {(onOpenSettings || isSticked) && (
+                  <span data-capture-hide className="contents">
+                    {!vimEnabled && (
+                      <button
+                        onClick={() => {
+                          const next = !formatToolbar;
+                          setFormatToolbar(next);
+                          try {
+                            localStorage.setItem(
+                              "stik:format-toolbar",
+                              next ? "1" : "0",
+                            );
+                          } catch {}
+                        }}
+                        className={`w-6 h-6 flex items-center justify-center rounded-md transition-colors ${
+                          formatToolbar
+                            ? "text-coral hover:bg-coral-light"
+                            : "text-stone hover:bg-line hover:text-ink"
+                        }`}
+                        title={
+                          formatToolbar
+                            ? "Hide format buttons"
+                            : "Show format buttons"
+                        }
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M4 7V4h16v3" />
+                          <path d="M9 20h6" />
+                          <path d="M12 4v16" />
+                        </svg>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => invoke("open_command_palette")}
+                      className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
+                      title={`Command Palette (${formatShortcutDisplay(systemShortcuts.search || "Cmd+Shift+P")})`}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() =>
+                        isSticked ? invoke("open_settings") : onOpenSettings?.()
+                      }
+                      className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-line text-stone hover:text-ink transition-colors"
+                      title={`Settings (${formatShortcutDisplay(systemShortcuts.settings || "Cmd+Shift+Comma")})`}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                      </svg>
+                    </button>
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
-        )
-      )}
-    </div>
-    {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+          ))}
+      </div>
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
     </>
   );
 }

@@ -226,11 +226,8 @@ pub fn embed_content(content: &str) -> Option<NoteEmbedding> {
     }
 
     // Detect language first
-    let lang_result = darwinkit::call(
-        "nlp.language",
-        Some(serde_json::json!({ "text": content })),
-    )
-    .ok()?;
+    let lang_result =
+        darwinkit::call("nlp.language", Some(serde_json::json!({ "text": content }))).ok()?;
     let language = lang_result
         .get("language")
         .and_then(|v| v.as_str())
@@ -266,10 +263,7 @@ pub fn embed_content(content: &str) -> Option<NoteEmbedding> {
 
 /// Build embeddings for all notes in the NoteIndex that are missing or stale.
 /// Called as a background task during app setup.
-pub fn build_embeddings(
-    index: &super::index::NoteIndex,
-    embeddings: &EmbeddingIndex,
-) {
+pub fn build_embeddings(index: &super::index::NoteIndex, embeddings: &EmbeddingIndex) {
     embeddings.ensure_loaded();
 
     let entries = match index.list(None) {
@@ -297,8 +291,11 @@ pub fn build_embeddings(
     let mut embedded = 0;
 
     for entry in &entries {
+        if entry.locked {
+            continue;
+        }
         // Read full content
-        let content = match fs::read_to_string(&entry.path) {
+        let content = match super::storage::read_file(&entry.path) {
             Ok(c) => c,
             Err(_) => continue,
         };

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::SystemTime;
 use std::time::Instant;
+use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
 
@@ -21,6 +21,7 @@ pub struct NoteEntry {
     pub preview: String,
     pub created: String,
     pub content_len: usize,
+    pub locked: bool,
 }
 
 pub struct NoteIndex {
@@ -38,27 +39,25 @@ impl NoteIndex {
 
     pub fn build(&self) -> Result<(), String> {
         let stik_folder = get_stik_folder()?;
+        let stik_path = stik_folder.to_string_lossy();
         let mut new_entries = HashMap::new();
 
-        let folders: Vec<PathBuf> = fs::read_dir(&stik_folder)
-            .map_err(|e| e.to_string())?
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| entry.path().is_dir())
-            .map(|entry| entry.path())
-            .collect();
+        let dir_entries = super::storage::list_dir(&stik_path)?;
 
-        for folder_path in folders {
-            let folder_name = folder_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+        // Index folders
+        for dir_entry in &dir_entries {
+            if !dir_entry.is_directory {
+                continue;
+            }
+            let folder_name = &dir_entry.name;
+            let folder_path = stik_folder.join(folder_name);
+            let folder_path_str = folder_path.to_string_lossy();
 
-            if let Ok(entries) = fs::read_dir(&folder_path) {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    let path = entry.path();
-                    if path.extension().map_or(false, |ext| ext == "md") {
-                        if let Some(note_entry) = read_note_entry(&path, &folder_name) {
+            if let Ok(files) = super::storage::list_dir(&folder_path_str) {
+                for file in files {
+                    if !file.is_directory && file.name.ends_with(".md") {
+                        let path = folder_path.join(&file.name);
+                        if let Some(note_entry) = read_note_entry(&path, folder_name) {
                             new_entries.insert(note_entry.path.clone(), note_entry);
                         }
                     }
@@ -67,9 +66,9 @@ impl NoteIndex {
         }
 
         // Index root-level .md files (no folder)
-        for entry in fs::read_dir(&stik_folder).map_err(|e| e.to_string())?.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "md") {
+        for dir_entry in &dir_entries {
+            if !dir_entry.is_directory && dir_entry.name.ends_with(".md") {
+                let path = stik_folder.join(&dir_entry.name);
                 if let Some(note_entry) = read_note_entry(&path, "") {
                     new_entries.insert(note_entry.path.clone(), note_entry);
                 }
@@ -127,6 +126,51 @@ impl NoteIndex {
         }
     }
 
+    /// Handle external changes from iCloud sync — re-index specific paths.
+    /// Called when DarwinKit pushes icloud.files_changed notifications.
+    pub fn notify_external_change(&self, paths: &[String]) {
+        let stik_folder = match get_stik_folder() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+
+        for path_str in paths {
+            let path = PathBuf::from(path_str);
+
+            // Only index .md files within the Stik root
+            if !path.starts_with(&stik_folder) || !path_str.ends_with(".md") {
+                continue;
+            }
+
+            // Extract folder name from path
+            let folder = path
+                .strip_prefix(&stik_folder)
+                .ok()
+                .and_then(|rel| rel.components().next())
+                .and_then(|c| {
+                    let name = c.as_os_str().to_string_lossy().to_string();
+                    // If it's the file itself (root-level), return empty
+                    if name.ends_with(".md") {
+                        None
+                    } else {
+                        Some(name)
+                    }
+                })
+                .unwrap_or_default();
+
+            // Try to re-index — if file was deleted, remove from index
+            if super::storage::path_exists(path_str) {
+                if let Some(entry) = read_note_entry(&path, &folder) {
+                    entries.insert(entry.path.clone(), entry);
+                }
+            } else {
+                entries.remove(path_str);
+            }
+        }
+    }
+
     pub fn get(&self, path: &str) -> Option<NoteEntry> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         entries.get(path).cloned()
@@ -146,7 +190,11 @@ impl NoteIndex {
         Ok(result)
     }
 
-    pub fn search(&self, query: &str, folder: Option<&str>) -> Result<Vec<(NoteEntry, String)>, String> {
+    pub fn search(
+        &self,
+        query: &str,
+        folder: Option<&str>,
+    ) -> Result<Vec<(NoteEntry, String)>, String> {
         self.ensure_fresh()?;
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let query_lower = query.to_lowercase();
@@ -154,6 +202,9 @@ impl NoteIndex {
         let mut results: Vec<(NoteEntry, String)> = Vec::new();
 
         for entry in entries.values() {
+            if entry.locked {
+                continue; // Can't search encrypted content
+            }
             if let Some(f) = folder {
                 if entry.folder != f {
                     continue;
@@ -166,8 +217,7 @@ impl NoteIndex {
                 results.push((entry.clone(), snippet));
             } else if entry.content_len > PREVIEW_LENGTH {
                 // Preview didn't match but note is longer — fall back to full read
-                let path = PathBuf::from(&entry.path);
-                if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(content) = super::storage::read_file(&entry.path) {
                     if content.to_lowercase().contains(&query_lower) {
                         let snippet = extract_snippet(&content, query, 100);
                         results.push((entry.clone(), snippet));
@@ -188,18 +238,34 @@ pub fn rebuild_index(index: tauri::State<'_, NoteIndex>) -> Result<bool, String>
 }
 
 fn read_note_entry(path: &PathBuf, folder: &str) -> Option<NoteEntry> {
-    let content = fs::read_to_string(path).ok()?;
-    let content_len = content.len();
-    let title = extract_title(&content);
+    let path_str = path.to_string_lossy();
+    let content = super::storage::read_file(&path_str).ok()?;
+    let locked = super::note_lock::is_locked_content(&content);
 
-    let preview = if content.len() > PREVIEW_LENGTH {
-        let mut end = PREVIEW_LENGTH;
-        while end > 0 && !content.is_char_boundary(end) {
-            end -= 1;
-        }
-        content[..end].to_string()
+    let (title, preview, content_len) = if locked {
+        // Derive title from filename: YYYYMMDD-HHMMSS-slug-uuid.md → slug
+        let fname = path.file_stem().unwrap_or_default().to_string_lossy();
+        let title = fname
+            .splitn(3, '-') // ["YYYYMMDD", "HHMMSS", "slug-uuid"]
+            .nth(2) // "slug-uuid"
+            .and_then(|rest| rest.rfind('-').map(|i| &rest[..i])) // drop UUID suffix
+            .filter(|s| !s.is_empty())
+            .map(|s| s.replace('-', " "))
+            .unwrap_or_else(|| fname.to_string());
+        (title, String::new(), 0)
     } else {
-        content
+        let content_len = content.len();
+        let title = extract_title(&content);
+        let preview = if content.len() > PREVIEW_LENGTH {
+            let mut end = PREVIEW_LENGTH;
+            while end > 0 && !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            content[..end].to_string()
+        } else {
+            content
+        };
+        (title, preview, content_len)
     };
 
     let filename = path
@@ -221,6 +287,7 @@ fn read_note_entry(path: &PathBuf, folder: &str) -> Option<NoteEntry> {
         preview,
         created,
         content_len,
+        locked,
     })
 }
 

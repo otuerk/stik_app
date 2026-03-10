@@ -10,5 +10,18 @@
     <!-- Global shortcuts via Accessibility API -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- iCloud Drive access (matching iOS iCloud.com.0xmassi.stik container) -->
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <string>iCloud.com.0xmassi.stik</string>
+    </array>
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudDocuments</string>
+    </array>
+    <key>com.apple.developer.ubiquity-container-identifiers</key>
+    <array>
+        <string>iCloud.com.0xmassi.stik</string>
+    </array>
 </dict>
 </plist>

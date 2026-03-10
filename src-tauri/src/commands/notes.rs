@@ -1,16 +1,15 @@
 use base64::Engine;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::state::{AppState, LastSavedNote};
 use super::analytics;
 use super::embeddings::{self, EmbeddingIndex};
 use super::folders::get_stik_folder;
 use super::git_share;
 use super::index::NoteIndex;
+use crate::state::{AppState, LastSavedNote};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSaved {
@@ -26,6 +25,8 @@ pub struct NoteInfo {
     pub folder: String,
     pub content: String,
     pub created: String,
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -36,6 +37,8 @@ pub struct SearchResult {
     pub title: String,
     pub snippet: String,
     pub created: String,
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// Generate a slug from content (first 5 words, max 40 chars)
@@ -106,13 +109,13 @@ pub fn save_note_inner(folder: String, content: String) -> Result<NoteSaved, Str
     let folder_path = stik_folder.join(&folder);
 
     // Ensure folder exists
-    fs::create_dir_all(&folder_path).map_err(|e| e.to_string())?;
+    super::storage::ensure_dir(&folder_path.to_string_lossy())?;
 
     // Generate filename and write
     let filename = generate_filename(&content);
     let file_path = folder_path.join(&filename);
 
-    fs::write(&file_path, &content).map_err(|e| e.to_string())?;
+    super::storage::write_file(&file_path.to_string_lossy(), &content)?;
 
     Ok(NoteSaved {
         path: file_path.to_string_lossy().to_string(),
@@ -133,11 +136,17 @@ pub fn save_note(
 
     if !result.path.is_empty() {
         let word_count = content.split_whitespace().count();
-        analytics::track("note_created", serde_json::json!({ "word_count": word_count }));
+        analytics::track(
+            "note_created",
+            serde_json::json!({ "word_count": word_count }),
+        );
 
         index.add(&result.path, &result.folder);
         git_share::notify_note_changed(&result.folder);
-        if super::settings::load_settings_from_file().map(|s| s.ai_features_enabled).unwrap_or(false) {
+        if super::settings::load_settings_from_file()
+            .map(|s| s.ai_features_enabled)
+            .unwrap_or(false)
+        {
             if let Some(emb) = embeddings::embed_content(&content) {
                 emb_index.add_entry(&result.path, emb);
                 let _ = emb_index.save();
@@ -145,7 +154,10 @@ pub fn save_note(
         }
 
         let state = app.state::<AppState>();
-        let mut last = state.last_saved_note.lock().unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        let mut last = state
+            .last_saved_note
+            .lock()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
         *last = Some(LastSavedNote {
             path: result.path.clone(),
             folder: result.folder.clone(),
@@ -165,6 +177,7 @@ pub fn list_notes(
     Ok(entries
         .into_iter()
         .map(|e| NoteInfo {
+            locked: e.locked,
             path: e.path,
             filename: e.filename,
             folder: e.folder,
@@ -189,6 +202,7 @@ pub fn search_notes(
     Ok(results
         .into_iter()
         .map(|(entry, snippet)| SearchResult {
+            locked: entry.locked,
             path: entry.path,
             filename: entry.filename,
             folder: entry.folder,
@@ -206,11 +220,11 @@ pub fn get_note_content_inner(path: &str) -> Result<String, String> {
     if !note_path.starts_with(&stik_folder) {
         return Err("Invalid path: note must be within Stik folder".to_string());
     }
-    if !note_path.exists() {
+    if !super::storage::path_exists(path) {
         return Err("Note file does not exist".to_string());
     }
 
-    fs::read_to_string(&note_path).map_err(|e| e.to_string())
+    super::storage::read_file(path)
 }
 
 #[tauri::command]
@@ -237,18 +251,20 @@ pub fn update_note(
             .map(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
             .unwrap_or(false);
         if !is_markdown {
-            return Err("Invalid path: only markdown files can be edited outside Stik folder".to_string());
+            return Err(
+                "Invalid path: only markdown files can be edited outside Stik folder".to_string(),
+            );
         }
     }
 
     // Check file exists
-    if !note_path.exists() {
+    if !super::storage::path_exists(&path) {
         return Err("Note file does not exist".to_string());
     }
 
     // In Stik-managed notes, empty content deletes the note.
     if in_stik_folder && is_effectively_empty_markdown(&content) {
-        fs::remove_file(&note_path).map_err(|e| format!("Failed to delete note: {}", e))?;
+        super::storage::delete_file(&path).map_err(|e| format!("Failed to delete note: {}", e))?;
         index.remove(&path);
         emb_index.remove_entry(&path);
         let _ = emb_index.save();
@@ -272,16 +288,22 @@ pub fn update_note(
         .unwrap_or_default();
 
     // Write updated content
-    fs::write(&note_path, &content).map_err(|e| e.to_string())?;
+    super::storage::write_file(&path, &content)?;
 
     let word_count = content.split_whitespace().count();
-    analytics::track("note_updated", serde_json::json!({ "word_count": word_count }));
+    analytics::track(
+        "note_updated",
+        serde_json::json!({ "word_count": word_count }),
+    );
 
     if in_stik_folder {
         // Re-index with updated content
         index.add(&path, &folder);
         git_share::notify_note_changed(&folder);
-        if super::settings::load_settings_from_file().map(|s| s.ai_features_enabled).unwrap_or(false) {
+        if super::settings::load_settings_from_file()
+            .map(|s| s.ai_features_enabled)
+            .unwrap_or(false)
+        {
             if let Some(emb) = embeddings::embed_content(&content) {
                 emb_index.add_entry(&path, emb);
                 let _ = emb_index.save();
@@ -312,7 +334,7 @@ pub fn delete_note(
     }
 
     // Check file exists
-    if !note_path.exists() {
+    if !super::storage::path_exists(&path) {
         return Err("Note file does not exist".to_string());
     }
 
@@ -323,13 +345,13 @@ pub fn delete_note(
         .unwrap_or_default();
 
     // Delete referenced .assets/ images
-    if let Ok(content) = fs::read_to_string(&note_path) {
+    if let Ok(content) = super::storage::read_file(&path) {
         let folder_path = note_path.parent().unwrap_or(&stik_folder);
         delete_note_assets(&content, folder_path);
     }
 
     // Delete the file
-    fs::remove_file(&note_path).map_err(|e| format!("Failed to delete note: {}", e))?;
+    super::storage::delete_file(&path).map_err(|e| format!("Failed to delete note: {}", e))?;
     analytics::track("note_deleted", serde_json::json!({}));
     index.remove(&path);
     emb_index.remove_entry(&path);
@@ -363,13 +385,13 @@ pub fn move_note(
     }
 
     // Check source file exists
-    if !source_path.exists() {
+    if !super::storage::path_exists(&path) {
         return Err("Note file does not exist".to_string());
     }
 
     // Ensure target folder exists
     let target_folder_path = stik_folder.join(&target_folder);
-    fs::create_dir_all(&target_folder_path).map_err(|e| e.to_string())?;
+    super::storage::ensure_dir(&target_folder_path.to_string_lossy())?;
 
     // Get filename from source
     let filename = source_path
@@ -382,7 +404,7 @@ pub fn move_note(
     let target_path = target_folder_path.join(&filename);
 
     // Read content before moving
-    let content = fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
+    let content = super::storage::read_file(&path)?;
 
     // Move referenced .assets/ images to the target folder
     if source_folder != target_folder {
@@ -391,7 +413,8 @@ pub fn move_note(
     }
 
     // Move the file
-    fs::rename(&source_path, &target_path).map_err(|e| format!("Failed to move note: {}", e))?;
+    super::storage::move_file(&path, &target_path.to_string_lossy())
+        .map_err(|e| format!("Failed to move note: {}", e))?;
 
     let new_path_str = target_path.to_string_lossy().to_string();
     index.move_entry(&path, &new_path_str, &target_folder);
@@ -403,12 +426,14 @@ pub fn move_note(
     // Extract created date from filename
     let created = filename.split('-').take(2).collect::<Vec<_>>().join("-");
 
+    let locked = super::note_lock::is_locked_content(&content);
     Ok(NoteInfo {
         path: new_path_str,
         filename,
         folder: target_folder,
         content,
         created,
+        locked,
     })
 }
 
@@ -455,7 +480,11 @@ fn extract_asset_filenames(content: &str) -> Vec<String> {
 }
 
 /// Move referenced `.assets/` files from source folder to target folder.
-fn move_note_assets(content: &str, source_folder: &std::path::Path, target_folder: &std::path::Path) {
+fn move_note_assets(
+    content: &str,
+    source_folder: &std::path::Path,
+    target_folder: &std::path::Path,
+) {
     let filenames = extract_asset_filenames(content);
     if filenames.is_empty() {
         return;
@@ -464,22 +493,23 @@ fn move_note_assets(content: &str, source_folder: &std::path::Path, target_folde
     let source_assets = source_folder.join(".assets");
     let target_assets = target_folder.join(".assets");
 
-    if !source_assets.exists() {
+    if !super::storage::path_exists(&source_assets.to_string_lossy()) {
         return;
     }
 
     for name in filenames {
         let src = source_assets.join(&name);
-        if !src.exists() {
+        let src_str = src.to_string_lossy();
+        if !super::storage::path_exists(&src_str) {
             continue;
         }
-        if fs::create_dir_all(&target_assets).is_err() {
+        if super::storage::ensure_dir(&target_assets.to_string_lossy()).is_err() {
             continue;
         }
         let dst = target_assets.join(&name);
-        // Copy + remove instead of rename (works across volumes)
-        if fs::copy(&src, &dst).is_ok() {
-            let _ = fs::remove_file(&src);
+        // Copy + remove instead of rename (works across volumes and iCloud)
+        if super::storage::copy_file(&src_str, &dst.to_string_lossy()).is_ok() {
+            let _ = super::storage::delete_file(&src_str);
         }
     }
 }
@@ -490,7 +520,7 @@ fn delete_note_assets(content: &str, folder_path: &std::path::Path) {
     let assets_dir = folder_path.join(".assets");
     for name in filenames {
         let path = assets_dir.join(&name);
-        let _ = fs::remove_file(&path);
+        let _ = super::storage::delete_file(&path.to_string_lossy());
     }
 }
 
@@ -522,12 +552,14 @@ pub fn save_note_image(folder: String, image_data: String) -> Result<(String, St
 
     let stik_folder = get_stik_folder()?;
     let assets_dir = stik_folder.join(&folder).join(".assets");
-    fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to create .assets dir: {}", e))?;
+    super::storage::ensure_dir(&assets_dir.to_string_lossy())
+        .map_err(|e| format!("Failed to create .assets dir: {}", e))?;
 
     let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
     let file_path = assets_dir.join(&filename);
 
-    fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write image: {}", e))?;
+    super::storage::write_bytes(&file_path.to_string_lossy(), &bytes)
+        .map_err(|e| format!("Failed to write image: {}", e))?;
 
     let abs = file_path.to_string_lossy().to_string();
     let rel = format!(".assets/{}", filename);
@@ -535,7 +567,10 @@ pub fn save_note_image(folder: String, image_data: String) -> Result<(String, St
 }
 
 #[tauri::command]
-pub fn save_note_image_from_path(folder: String, file_path: String) -> Result<(String, String), String> {
+pub fn save_note_image_from_path(
+    folder: String,
+    file_path: String,
+) -> Result<(String, String), String> {
     super::folders::validate_name(&folder)?;
 
     let source_path = PathBuf::from(&file_path);
@@ -557,11 +592,12 @@ pub fn save_note_image_from_path(folder: String, file_path: String) -> Result<(S
 
     let stik_folder = get_stik_folder()?;
     let assets_dir = stik_folder.join(&folder).join(".assets");
-    fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to create .assets dir: {}", e))?;
+    super::storage::ensure_dir(&assets_dir.to_string_lossy())
+        .map_err(|e| format!("Failed to create .assets dir: {}", e))?;
 
     let filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
     let destination_path = assets_dir.join(&filename);
-    fs::copy(&source_path, &destination_path)
+    super::storage::copy_file(&file_path, &destination_path.to_string_lossy())
         .map_err(|e| format!("Failed to copy dropped image: {}", e))?;
 
     let abs = destination_path.to_string_lossy().to_string();

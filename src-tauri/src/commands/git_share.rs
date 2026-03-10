@@ -185,6 +185,12 @@ fn is_folder_linked_for_sync(folder: &str) -> bool {
         Ok(settings) => settings,
         Err(_) => return false,
     };
+
+    // iCloud and Git are mutually exclusive (v1 simplicity)
+    if settings.icloud.enabled {
+        return false;
+    }
+
     let config = settings.git_sharing;
     if !config.enabled || config.remote_url.trim().is_empty() {
         return false;
