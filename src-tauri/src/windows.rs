@@ -569,6 +569,9 @@ pub fn show_command_palette(app: &AppHandle) {
         win.on_window_event(move |event| match event {
             tauri::WindowEvent::Focused(focused) => {
                 if !focused {
+                    if let Some(palette) = app_handle.get_webview_window("command-palette") {
+                        let _ = palette.close();
+                    }
                     for (label, window) in app_handle.webview_windows() {
                         if label.starts_with("sticked-") {
                             let _ = window.set_always_on_top(true);
