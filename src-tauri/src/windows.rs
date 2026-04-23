@@ -1,13 +1,25 @@
 use crate::commands::{note_lock, notes, settings, sticked_notes};
 use crate::state::{AppState, LastSavedNote};
-use sticked_notes::StickedNote;
 use std::path::Path;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use sticked_notes::StickedNote;
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 
+const COMMAND_PALETTE_WINDOW_WIDTH: f64 = 700.0;
+const COMMAND_PALETTE_WINDOW_HEIGHT: f64 = 480.0;
 const SETTINGS_WINDOW_WIDTH: f64 = 860.0;
 const SETTINGS_WINDOW_HEIGHT: f64 = 720.0;
 const SETTINGS_WINDOW_MIN_WIDTH: f64 = 760.0;
 const SETTINGS_WINDOW_MIN_HEIGHT: f64 = 560.0;
+const DEFAULT_CAPTURE_WINDOW_WIDTH: f64 = 400.0;
+const DEFAULT_CAPTURE_WINDOW_HEIGHT: f64 = 280.0;
+const DEFAULT_VIEWING_WINDOW_WIDTH: f64 = 450.0;
+const DEFAULT_VIEWING_WINDOW_HEIGHT: f64 = 320.0;
+const DEFAULT_STICKED_WINDOW_WIDTH: f64 = 400.0;
+const DEFAULT_STICKED_WINDOW_HEIGHT: f64 = 280.0;
+const APPLE_NOTES_PICKER_WINDOW_WIDTH: f64 = 550.0;
+const APPLE_NOTES_PICKER_WINDOW_HEIGHT: f64 = 500.0;
 
 /// Minimum overlap (in physical pixels) between window and monitor for the position to be usable.
 const MIN_OVERLAP: f64 = 80.0;
@@ -18,38 +30,354 @@ struct ViewingWindowIdentity {
     viewing_id: String,
 }
 
-/// Check if a window at (x, y) with the given size overlaps sufficiently with any connected
-/// monitor. All coordinates are in **physical pixels** (same space as `outerPosition()`).
-/// Uses rectangle intersection — handles negative coordinates from left/top monitors.
-fn is_window_visible_on_any_monitor(app: &AppHandle, x: f64, y: f64, w: f64, h: f64) -> bool {
-    let monitors = app
-        .get_webview_window("postit")
-        .and_then(|win| win.available_monitors().ok());
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MonitorGeometry {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale_factor: f64,
+}
 
-    let Some(monitors) = monitors else {
-        return false;
-    };
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WindowFrame {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl MonitorGeometry {
+    fn from_monitor(monitor: &tauri::Monitor) -> Self {
+        let work_area = monitor.work_area();
+        Self {
+            x: work_area.position.x as f64,
+            y: work_area.position.y as f64,
+            width: work_area.size.width as f64,
+            height: work_area.size.height as f64,
+            scale_factor: monitor.scale_factor().max(1.0),
+        }
+    }
+}
+
+fn available_monitor_geometries(app: &AppHandle) -> Vec<MonitorGeometry> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(MonitorGeometry::from_monitor)
+        .collect()
+}
+
+fn logical_to_physical_size(logical_size: (f64, f64), scale_factor: f64) -> (f64, f64) {
+    let scale_factor = scale_factor.max(1.0);
+    (logical_size.0 * scale_factor, logical_size.1 * scale_factor)
+}
+
+fn overlap_dimensions(frame: WindowFrame, monitor: MonitorGeometry) -> (f64, f64) {
+    let overlap_w = (frame.x + frame.width).min(monitor.x + monitor.width) - frame.x.max(monitor.x);
+    let overlap_h =
+        (frame.y + frame.height).min(monitor.y + monitor.height) - frame.y.max(monitor.y);
+
+    (overlap_w.max(0.0), overlap_h.max(0.0))
+}
+
+fn clamp_origin(
+    origin: (f64, f64),
+    monitor: MonitorGeometry,
+    physical_size: (f64, f64),
+) -> (f64, f64) {
+    let max_x = (monitor.x + monitor.width - physical_size.0).max(monitor.x);
+    let max_y = (monitor.y + monitor.height - physical_size.1).max(monitor.y);
+
+    (
+        origin.0.clamp(monitor.x, max_x),
+        origin.1.clamp(monitor.y, max_y),
+    )
+}
+
+fn center_origin(monitor: MonitorGeometry, physical_size: (f64, f64)) -> (f64, f64) {
+    let centered = (
+        monitor.x + (monitor.width - physical_size.0) / 2.0,
+        monitor.y + (monitor.height - physical_size.1) / 2.0,
+    );
+    clamp_origin(centered, monitor, physical_size)
+}
+
+fn find_source_monitor(
+    monitors: &[MonitorGeometry],
+    saved_origin: (f64, f64),
+    logical_size: (f64, f64),
+) -> Option<MonitorGeometry> {
+    let mut best_match = None;
+    let mut best_overlap_area = 0.0;
 
     for monitor in monitors {
-        let pos = monitor.position();
-        let size = monitor.size();
+        let physical_size = logical_to_physical_size(logical_size, monitor.scale_factor);
+        let frame = WindowFrame {
+            x: saved_origin.0,
+            y: saved_origin.1,
+            width: physical_size.0,
+            height: physical_size.1,
+        };
+        let (overlap_w, overlap_h) = overlap_dimensions(frame, *monitor);
+        let overlap_area = overlap_w * overlap_h;
 
-        // All values in physical pixels — no scale conversion needed.
-        let mx = pos.x as f64;
-        let my = pos.y as f64;
-        let mw = size.width as f64;
-        let mh = size.height as f64;
-
-        // Rectangle intersection: overlap width/height between window and monitor
-        let overlap_w = (x + w).min(mx + mw) - x.max(mx);
-        let overlap_h = (y + h).min(my + mh) - y.max(my);
-
-        if overlap_w >= MIN_OVERLAP && overlap_h >= MIN_OVERLAP {
-            return true;
+        if overlap_w >= MIN_OVERLAP && overlap_h >= MIN_OVERLAP && overlap_area > best_overlap_area
+        {
+            best_overlap_area = overlap_area;
+            best_match = Some(*monitor);
         }
     }
 
-    false
+    best_match
+}
+
+fn resolve_window_origin(
+    saved_origin: Option<(f64, f64)>,
+    logical_size: (f64, f64),
+    preserve_relative_offset: bool,
+    target_monitor: MonitorGeometry,
+    monitors: &[MonitorGeometry],
+) -> (f64, f64) {
+    let target_physical_size = logical_to_physical_size(logical_size, target_monitor.scale_factor);
+
+    if preserve_relative_offset {
+        if let Some(saved_origin) = saved_origin {
+            if let Some(source_monitor) = find_source_monitor(monitors, saved_origin, logical_size)
+            {
+                let translated = (
+                    target_monitor.x + (saved_origin.0 - source_monitor.x),
+                    target_monitor.y + (saved_origin.1 - source_monitor.y),
+                );
+                return clamp_origin(translated, target_monitor, target_physical_size);
+            }
+        }
+    }
+
+    center_origin(target_monitor, target_physical_size)
+}
+
+fn current_window_logical_size(window: &WebviewWindow, fallback: (f64, f64)) -> (f64, f64) {
+    let scale_factor = window.scale_factor().unwrap_or(1.0).max(1.0);
+    window
+        .outer_size()
+        .map(|size| {
+            (
+                size.width as f64 / scale_factor,
+                size.height as f64 / scale_factor,
+            )
+        })
+        .unwrap_or(fallback)
+}
+
+fn primary_monitor_geometry(app: &AppHandle) -> Option<MonitorGeometry> {
+    app.primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| MonitorGeometry::from_monitor(&monitor))
+}
+
+fn monitor_from_screen_point(app: &AppHandle, x: f64, y: f64) -> Option<MonitorGeometry> {
+    app.monitor_from_point(x, y)
+        .ok()
+        .flatten()
+        .map(|monitor| MonitorGeometry::from_monitor(&monitor))
+}
+
+#[cfg(target_os = "macos")]
+fn focused_window_frame() -> Option<WindowFrame> {
+    use core_foundation::base::{CFTypeRef, TCFType};
+    use core_foundation::string::{CFString, CFStringRef};
+    use core_graphics::geometry::{CGPoint, CGSize};
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn AXUIElementCreateSystemWide() -> *mut c_void;
+        fn AXUIElementCopyAttributeValue(
+            element: *mut c_void,
+            attribute: CFStringRef,
+            value: *mut CFTypeRef,
+        ) -> i32;
+        fn AXValueGetValue(value: *const c_void, the_type: u32, value_ptr: *mut c_void) -> u8;
+        fn CFRelease(cf: *const c_void);
+    }
+
+    const AX_ERROR_SUCCESS: i32 = 0;
+    const AX_VALUE_TYPE_CG_POINT: u32 = 1;
+    const AX_VALUE_TYPE_CG_SIZE: u32 = 2;
+
+    unsafe {
+        let systemwide = AXUIElementCreateSystemWide();
+        if systemwide.is_null() {
+            return None;
+        }
+
+        let focused_window_attr = CFString::from_static_string("AXFocusedWindow");
+        let mut focused_window: CFTypeRef = std::ptr::null();
+        let focused_status = AXUIElementCopyAttributeValue(
+            systemwide,
+            focused_window_attr.as_concrete_TypeRef(),
+            &mut focused_window,
+        );
+        CFRelease(systemwide);
+
+        if focused_status != AX_ERROR_SUCCESS || focused_window.is_null() {
+            return None;
+        }
+
+        let position_attr = CFString::from_static_string("AXPosition");
+        let mut position_value: CFTypeRef = std::ptr::null();
+        let position_status = AXUIElementCopyAttributeValue(
+            focused_window as *mut c_void,
+            position_attr.as_concrete_TypeRef(),
+            &mut position_value,
+        );
+
+        let size_attr = CFString::from_static_string("AXSize");
+        let mut size_value: CFTypeRef = std::ptr::null();
+        let size_status = AXUIElementCopyAttributeValue(
+            focused_window as *mut c_void,
+            size_attr.as_concrete_TypeRef(),
+            &mut size_value,
+        );
+
+        CFRelease(focused_window);
+
+        if position_status != AX_ERROR_SUCCESS
+            || size_status != AX_ERROR_SUCCESS
+            || position_value.is_null()
+            || size_value.is_null()
+        {
+            if !position_value.is_null() {
+                CFRelease(position_value);
+            }
+            if !size_value.is_null() {
+                CFRelease(size_value);
+            }
+            return None;
+        }
+
+        let mut origin = CGPoint::new(0.0, 0.0);
+        let mut size = CGSize::new(0.0, 0.0);
+        let got_origin = AXValueGetValue(
+            position_value,
+            AX_VALUE_TYPE_CG_POINT,
+            &mut origin as *mut _ as *mut c_void,
+        ) != 0;
+        let got_size = AXValueGetValue(
+            size_value,
+            AX_VALUE_TYPE_CG_SIZE,
+            &mut size as *mut _ as *mut c_void,
+        ) != 0;
+
+        CFRelease(position_value);
+        CFRelease(size_value);
+
+        if !got_origin || !got_size {
+            return None;
+        }
+
+        Some(WindowFrame {
+            x: origin.x,
+            y: origin.y,
+            width: size.width,
+            height: size.height,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_position() -> Option<(f64, f64)> {
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let point = event.location();
+
+    Some((point.x, point.y))
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_active_monitor(app: &AppHandle) -> Option<MonitorGeometry> {
+    if let Some(frame) = focused_window_frame() {
+        let focused_window_center = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
+        if let Some(monitor) =
+            monitor_from_screen_point(app, focused_window_center.0, focused_window_center.1)
+        {
+            return Some(monitor);
+        }
+    }
+
+    if let Some((x, y)) = cursor_position() {
+        if let Some(monitor) = monitor_from_screen_point(app, x, y) {
+            return Some(monitor);
+        }
+    }
+
+    primary_monitor_geometry(app)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_active_monitor(app: &AppHandle) -> Option<MonitorGeometry> {
+    primary_monitor_geometry(app)
+}
+
+fn move_window_to_active_monitor(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    saved_origin: Option<(f64, f64)>,
+    logical_size: (f64, f64),
+    preserve_relative_offset: bool,
+) {
+    let Some(target_monitor) = resolve_active_monitor(app) else {
+        return;
+    };
+
+    let monitors = available_monitor_geometries(app);
+    let resolved_origin = resolve_window_origin(
+        saved_origin,
+        logical_size,
+        preserve_relative_offset,
+        target_monitor,
+        &monitors,
+    );
+
+    let _ = window.set_position(tauri::Position::Physical(PhysicalPosition::new(
+        resolved_origin.0.round() as i32,
+        resolved_origin.1.round() as i32,
+    )));
+}
+
+fn center_window_on_active_monitor(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    fallback_logical_size: (f64, f64),
+) {
+    let logical_size = current_window_logical_size(window, fallback_logical_size);
+    move_window_to_active_monitor(app, window, None, logical_size, false);
+}
+
+fn place_capture_window(app: &AppHandle, window: &WebviewWindow) {
+    let saved_settings = settings::load_settings_from_file().ok();
+    if let Some((width, height)) = saved_settings.as_ref().and_then(|s| s.capture_window_size) {
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)));
+    }
+
+    let logical_size = saved_settings
+        .as_ref()
+        .and_then(|s| s.capture_window_size)
+        .unwrap_or_else(|| {
+            current_window_logical_size(
+                window,
+                (DEFAULT_CAPTURE_WINDOW_WIDTH, DEFAULT_CAPTURE_WINDOW_HEIGHT),
+            )
+        });
+    let saved_origin = saved_settings
+        .as_ref()
+        .and_then(|s| s.viewing_window_position);
+
+    move_window_to_active_monitor(app, window, saved_origin, logical_size, true);
 }
 
 fn remember_last_note(state: &AppState, path: &str, folder: &str) {
@@ -95,10 +423,7 @@ fn filename_title_from_path(path: &str) -> String {
         stem.replace('-', " ")
     };
 
-    let title = raw_title
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let title = raw_title.split_whitespace().collect::<Vec<_>>().join(" ");
 
     if title.is_empty() {
         "Untitled".to_string()
@@ -187,23 +512,7 @@ fn derive_viewing_window_identity(content: &str, path: &str) -> ViewingWindowIde
 
 pub fn show_postit_with_folder(app: &AppHandle, folder: &str) {
     if let Some(window) = app.get_webview_window("postit") {
-        if let Ok(s) = settings::load_settings_from_file() {
-            // Restore persisted capture window size
-            let (w, h) = s.capture_window_size.unwrap_or((400.0, 280.0));
-            if s.capture_window_size.is_some() {
-                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(w, h)));
-            }
-            // Restore position only if it's visible on a connected monitor.
-            if let Some((x, y)) = s.viewing_window_position {
-                if is_window_visible_on_any_monitor(app, x, y, w, h) {
-                    let _ = window.set_position(tauri::Position::Physical(
-                        PhysicalPosition::new(x as i32, y as i32),
-                    ));
-                } else {
-                    let _ = window.center();
-                }
-            }
-        }
+        place_capture_window(app, &window);
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("shortcut-triggered", folder);
@@ -213,7 +522,10 @@ pub fn show_postit_with_folder(app: &AppHandle, folder: &str) {
 pub fn show_command_palette(app: &AppHandle) {
     {
         let state = app.state::<AppState>();
-        let mut postit_visible = state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
+        let mut postit_visible = state
+            .postit_was_visible
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *postit_visible = app
             .get_webview_window("postit")
             .map(|w| w.is_visible().unwrap_or(false))
@@ -227,6 +539,11 @@ pub fn show_command_palette(app: &AppHandle) {
     }
 
     if let Some(window) = app.get_webview_window("command-palette") {
+        center_window_on_active_monitor(
+            app,
+            &window,
+            (COMMAND_PALETTE_WINDOW_WIDTH, COMMAND_PALETTE_WINDOW_HEIGHT),
+        );
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -238,61 +555,73 @@ pub fn show_command_palette(app: &AppHandle) {
         WebviewUrl::App("index.html?window=command-palette".into()),
     )
     .title("Command Palette")
-    .inner_size(700.0, 480.0)
+    .inner_size(COMMAND_PALETTE_WINDOW_WIDTH, COMMAND_PALETTE_WINDOW_HEIGHT)
     .resizable(false)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
     .skip_taskbar(true)
-    .center()
+    .visible(false)
     .build();
 
     if let Ok(win) = window {
         let app_handle = app.clone();
-        win.on_window_event(move |event| {
-            match event {
-                tauri::WindowEvent::Focused(focused) => {
-                    if !focused {
-                        for (label, window) in app_handle.webview_windows() {
-                            if label.starts_with("sticked-") {
-                                let _ = window.set_always_on_top(true);
-                            }
-                        }
-                    }
-                }
-                tauri::WindowEvent::Destroyed => {
+        win.on_window_event(move |event| match event {
+            tauri::WindowEvent::Focused(focused) => {
+                if !focused {
                     for (label, window) in app_handle.webview_windows() {
                         if label.starts_with("sticked-") {
                             let _ = window.set_always_on_top(true);
                         }
                     }
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
+                for (label, window) in app_handle.webview_windows() {
+                    if label.starts_with("sticked-") {
+                        let _ = window.set_always_on_top(true);
+                    }
+                }
 
-                    let state = app_handle.state::<AppState>();
-                    let postit_visible = *state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
+                let state = app_handle.state::<AppState>();
+                let postit_visible = *state
+                    .postit_was_visible
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
 
-                    if postit_visible {
-                        let has_viewing_windows = app_handle
-                            .webview_windows()
-                            .iter()
-                            .any(|(label, _)| label.starts_with("sticked-view-"));
-                        if !has_viewing_windows {
-                            if let Some(postit) = app_handle.get_webview_window("postit") {
-                                let _ = postit.show();
-                                let _ = postit.set_focus();
-                            }
+                if postit_visible {
+                    let has_viewing_windows = app_handle
+                        .webview_windows()
+                        .iter()
+                        .any(|(label, _)| label.starts_with("sticked-view-"));
+                    if !has_viewing_windows {
+                        if let Some(postit) = app_handle.get_webview_window("postit") {
+                            let _ = postit.show();
+                            let _ = postit.set_focus();
                         }
                     }
                 }
-                _ => {}
             }
+            _ => {}
         });
+
+        center_window_on_active_monitor(
+            app,
+            &win,
+            (COMMAND_PALETTE_WINDOW_WIDTH, COMMAND_PALETTE_WINDOW_HEIGHT),
+        );
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 
 pub fn show_settings(app: &AppHandle) {
     {
         let state = app.state::<AppState>();
-        let mut prev_window = state.previous_focused_window.lock().unwrap_or_else(|e| e.into_inner());
+        let mut prev_window = state
+            .previous_focused_window
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *prev_window = None;
 
         for (label, window) in app.webview_windows() {
@@ -304,7 +633,10 @@ pub fn show_settings(app: &AppHandle) {
             }
         }
 
-        let mut postit_visible = state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
+        let mut postit_visible = state
+            .postit_was_visible
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *postit_visible = app
             .get_webview_window("postit")
             .map(|w| w.is_visible().unwrap_or(false))
@@ -318,6 +650,11 @@ pub fn show_settings(app: &AppHandle) {
     }
 
     if let Some(window) = app.get_webview_window("settings") {
+        center_window_on_active_monitor(
+            app,
+            &window,
+            (SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT),
+        );
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -336,7 +673,7 @@ pub fn show_settings(app: &AppHandle) {
     .transparent(true)
     .always_on_top(true)
     .skip_taskbar(true)
-    .center()
+    .visible(false)
     .build();
 
     if let Ok(win) = window {
@@ -350,8 +687,14 @@ pub fn show_settings(app: &AppHandle) {
                 }
 
                 let state = app_handle.state::<AppState>();
-                let prev_window = state.previous_focused_window.lock().unwrap_or_else(|e| e.into_inner());
-                let postit_visible = *state.postit_was_visible.lock().unwrap_or_else(|e| e.into_inner());
+                let prev_window = state
+                    .previous_focused_window
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let postit_visible = *state
+                    .postit_was_visible
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
 
                 if let Some(label) = prev_window.as_ref() {
                     if let Some(window) = app_handle.get_webview_window(label) {
@@ -366,6 +709,10 @@ pub fn show_settings(app: &AppHandle) {
                 }
             }
         });
+
+        center_window_on_active_monitor(app, &win, (SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT));
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 
@@ -411,9 +758,9 @@ pub fn create_sticked_window(app: AppHandle, note: StickedNote) -> Result<bool, 
     match window {
         Ok(win) => {
             if let Some((x, y)) = saved_position {
-                let _ = win.set_position(tauri::Position::Physical(
-                    PhysicalPosition::new(x as i32, y as i32),
-                ));
+                let _ = win.set_position(tauri::Position::Physical(PhysicalPosition::new(
+                    x as i32, y as i32,
+                )));
             } else {
                 let _ = win.center();
             }
@@ -439,19 +786,22 @@ pub fn create_sticked_window_centered(app: AppHandle, note: StickedNote) -> Resu
         .inner_size(width, height)
         .min_inner_size(320.0, 200.0)
         .max_inner_size(800.0, 600.0)
-        .center()
         .resizable(true)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
+        .visible(false)
         .build();
 
-    if let Err(e) = window {
-        return Err(format!("Failed to create sticked window: {}", e));
+    match window {
+        Ok(win) => {
+            center_window_on_active_monitor(&app, &win, (width, height));
+            let _ = win.show();
+            Ok(true)
+        }
+        Err(e) => Err(format!("Failed to create sticked window: {}", e)),
     }
-
-    Ok(true)
 }
 
 #[tauri::command]
@@ -465,7 +815,10 @@ pub fn close_sticked_window(app: AppHandle, id: String) -> Result<bool, String> 
     // Clean up viewing note cache to prevent memory leak
     if id.starts_with("view-") {
         let state = app.state::<AppState>();
-        let mut viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut viewing_notes = state
+            .viewing_notes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         viewing_notes.remove(&id);
     }
 
@@ -482,21 +835,25 @@ pub async fn pin_capture_note(
     // sticked/viewing window was, not always centered.
     let saved = settings::load_settings_from_file().ok();
     let saved_pos = saved.as_ref().and_then(|s| s.viewing_window_position);
-    let saved_size = saved.as_ref().and_then(|s| s.viewing_window_size);
+    let logical_size = saved
+        .as_ref()
+        .and_then(|s| s.viewing_window_size)
+        .unwrap_or((DEFAULT_STICKED_WINDOW_WIDTH, DEFAULT_STICKED_WINDOW_HEIGHT));
 
     let mut note = sticked_notes::create_sticked_note(content, folder, None)?;
+    let monitors = available_monitor_geometries(&app);
 
-    // Use saved viewing position if it's on a connected monitor, otherwise center.
-    let use_saved = saved_pos.is_some_and(|(x, y)| {
-        let (w, h) = saved_size.unwrap_or((400.0, 280.0));
-        is_window_visible_on_any_monitor(&app, x, y, w, h)
-    });
+    if let Some(target_monitor) = resolve_active_monitor(&app) {
+        let resolved_origin =
+            resolve_window_origin(saved_pos, logical_size, true, target_monitor, &monitors);
+        note.position = Some(resolved_origin);
+    }
 
-    if let (true, Some((x, y))) = (use_saved, saved_pos) {
-        note.position = Some((x, y));
-        if let Some((w, h)) = saved_size {
-            note.size = Some((w, h));
-        }
+    if saved.as_ref().and_then(|s| s.viewing_window_size).is_some() {
+        note.size = Some(logical_size);
+    }
+
+    if note.position.is_some() {
         create_sticked_window(app.clone(), note.clone())?;
     } else {
         create_sticked_window_centered(app.clone(), note.clone())?;
@@ -550,7 +907,10 @@ pub async fn open_note_for_viewing(
 
     {
         let state = app.state::<AppState>();
-        let mut viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut viewing_notes = state
+            .viewing_notes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         viewing_notes.insert(
             identity.viewing_id.clone(),
             crate::state::ViewingNoteContent {
@@ -571,8 +931,10 @@ pub async fn open_note_for_viewing(
     let (width, height) = saved_settings
         .as_ref()
         .and_then(|s| s.viewing_window_size)
-        .unwrap_or((450.0, 320.0));
-    let saved_position = saved_settings.as_ref().and_then(|s| s.viewing_window_position);
+        .unwrap_or((DEFAULT_VIEWING_WINDOW_WIDTH, DEFAULT_VIEWING_WINDOW_HEIGHT));
+    let saved_position = saved_settings
+        .as_ref()
+        .and_then(|s| s.viewing_window_position);
 
     // Build hidden — we position after creation using PhysicalPosition to avoid
     // the logical/physical mismatch in WebviewWindowBuilder::position().
@@ -592,18 +954,7 @@ pub async fn open_note_for_viewing(
 
     match window {
         Ok(win) => {
-            // Restore saved position in physical pixels, or center as fallback.
-            let positioned = saved_position.is_some_and(|(x, y)| {
-                is_window_visible_on_any_monitor(&app, x, y, width, height)
-            });
-            if let (true, Some((x, y))) = (positioned, saved_position) {
-                let _ = win.set_position(tauri::Position::Physical(
-                    PhysicalPosition::new(x as i32, y as i32),
-                ));
-            } else {
-                let _ = win.center();
-            }
-
+            move_window_to_active_monitor(&app, &win, saved_position, (width, height), true);
             let _ = win.show();
             let _ = win.set_focus();
             Ok(true)
@@ -615,7 +966,10 @@ pub async fn open_note_for_viewing(
 #[tauri::command]
 pub fn get_viewing_note_content(app: AppHandle, id: String) -> Result<serde_json::Value, String> {
     let state = app.state::<AppState>();
-    let viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
+    let viewing_notes = state
+        .viewing_notes
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
 
     if let Some(note) = viewing_notes.get(&id) {
         Ok(serde_json::json!({
@@ -630,14 +984,22 @@ pub fn get_viewing_note_content(app: AppHandle, id: String) -> Result<serde_json
 }
 
 #[tauri::command]
-pub fn transfer_to_capture(app: AppHandle, content: String, folder: String) -> Result<bool, String> {
+pub fn transfer_to_capture(
+    app: AppHandle,
+    content: String,
+    folder: String,
+) -> Result<bool, String> {
     if let Some(window) = app.get_webview_window("postit") {
+        place_capture_window(&app, &window);
         let _ = window.show();
         let _ = window.set_focus();
-        let _ = window.emit("transfer-content", serde_json::json!({
-            "content": content,
-            "folder": folder
-        }));
+        let _ = window.emit(
+            "transfer-content",
+            serde_json::json!({
+                "content": content,
+                "folder": folder
+            }),
+        );
         Ok(true)
     } else {
         Err("Postit window not found".to_string())
@@ -672,7 +1034,10 @@ pub fn open_settings(app: AppHandle) -> Result<bool, String> {
 pub async fn reopen_last_note(app: AppHandle) -> Result<bool, String> {
     let (path, folder) = {
         let state = app.state::<AppState>();
-        let last = state.last_saved_note.lock().unwrap_or_else(|e| e.into_inner());
+        let last = state
+            .last_saved_note
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match last.as_ref() {
             Some(note) => (note.path.clone(), note.folder.clone()),
             None => return Err("No note saved yet".to_string()),
@@ -685,6 +1050,14 @@ pub async fn reopen_last_note(app: AppHandle) -> Result<bool, String> {
 
 pub fn show_apple_notes_picker(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("apple-notes-picker") {
+        center_window_on_active_monitor(
+            app,
+            &window,
+            (
+                APPLE_NOTES_PICKER_WINDOW_WIDTH,
+                APPLE_NOTES_PICKER_WINDOW_HEIGHT,
+            ),
+        );
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -696,13 +1069,16 @@ pub fn show_apple_notes_picker(app: &AppHandle) {
         WebviewUrl::App("index.html?window=apple-notes-picker".into()),
     )
     .title("Import from Apple Notes")
-    .inner_size(550.0, 500.0)
+    .inner_size(
+        APPLE_NOTES_PICKER_WINDOW_WIDTH,
+        APPLE_NOTES_PICKER_WINDOW_HEIGHT,
+    )
     .resizable(false)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
     .skip_taskbar(true)
-    .center()
+    .visible(false)
     .build();
 
     if let Ok(win) = window {
@@ -716,6 +1092,17 @@ pub fn show_apple_notes_picker(app: &AppHandle) {
                 }
             }
         });
+
+        center_window_on_active_monitor(
+            app,
+            &win,
+            (
+                APPLE_NOTES_PICKER_WINDOW_WIDTH,
+                APPLE_NOTES_PICKER_WINDOW_HEIGHT,
+            ),
+        );
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 
@@ -736,8 +1123,8 @@ pub fn restore_sticked_notes(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_viewing_window_identity, remember_last_note, SETTINGS_WINDOW_MIN_WIDTH,
-        SETTINGS_WINDOW_WIDTH,
+        derive_viewing_window_identity, remember_last_note, resolve_window_origin, MonitorGeometry,
+        SETTINGS_WINDOW_MIN_WIDTH, SETTINGS_WINDOW_WIDTH,
     };
     use crate::state::AppState;
 
@@ -746,7 +1133,10 @@ mod tests {
         let state = AppState::new();
         remember_last_note(&state, "/tmp/stik/foo.md", "Inbox");
 
-        let last = state.last_saved_note.lock().unwrap_or_else(|e| e.into_inner());
+        let last = state
+            .last_saved_note
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let note = last.as_ref().expect("last note should be set");
         assert_eq!(note.path, "/tmp/stik/foo.md");
         assert_eq!(note.folder, "Inbox");
@@ -756,6 +1146,108 @@ mod tests {
     fn settings_window_min_width_is_large_enough_for_full_menu_bar() {
         assert!(SETTINGS_WINDOW_MIN_WIDTH >= 760.0);
         assert!(SETTINGS_WINDOW_WIDTH > SETTINGS_WINDOW_MIN_WIDTH);
+    }
+
+    #[test]
+    fn preserve_relative_offset_on_same_monitor_keeps_saved_origin() {
+        let monitors = vec![MonitorGeometry {
+            x: 0.0,
+            y: 0.0,
+            width: 1600.0,
+            height: 900.0,
+            scale_factor: 2.0,
+        }];
+
+        let origin = resolve_window_origin(
+            Some((120.0, 150.0)),
+            (400.0, 300.0),
+            true,
+            monitors[0],
+            &monitors,
+        );
+
+        assert_eq!(origin, (120.0, 150.0));
+    }
+
+    #[test]
+    fn preserve_relative_offset_moves_window_to_active_monitor() {
+        let monitors = vec![
+            MonitorGeometry {
+                x: 0.0,
+                y: 0.0,
+                width: 1600.0,
+                height: 900.0,
+                scale_factor: 2.0,
+            },
+            MonitorGeometry {
+                x: 1600.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+                scale_factor: 1.0,
+            },
+        ];
+
+        let origin = resolve_window_origin(
+            Some((200.0, 100.0)),
+            (400.0, 300.0),
+            true,
+            monitors[1],
+            &monitors,
+        );
+
+        assert_eq!(origin, (1800.0, 100.0));
+    }
+
+    #[test]
+    fn mixed_scale_translation_clamps_using_target_monitor_scale() {
+        let monitors = vec![
+            MonitorGeometry {
+                x: 0.0,
+                y: 0.0,
+                width: 1512.0,
+                height: 982.0,
+                scale_factor: 2.0,
+            },
+            MonitorGeometry {
+                x: 1512.0,
+                y: 0.0,
+                width: 1000.0,
+                height: 700.0,
+                scale_factor: 1.0,
+            },
+        ];
+
+        let origin = resolve_window_origin(
+            Some((1200.0, 500.0)),
+            (400.0, 300.0),
+            true,
+            monitors[1],
+            &monitors,
+        );
+
+        assert_eq!(origin, (2112.0, 400.0));
+    }
+
+    #[test]
+    fn invalid_saved_origin_falls_back_to_center_on_target_monitor() {
+        let monitors = vec![MonitorGeometry {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+            scale_factor: 1.0,
+        }];
+
+        let origin = resolve_window_origin(
+            Some((5000.0, 50.0)),
+            (400.0, 300.0),
+            true,
+            monitors[0],
+            &monitors,
+        );
+
+        assert_eq!(origin, (760.0, 390.0));
     }
 
     #[test]
@@ -775,7 +1267,9 @@ mod tests {
             identity.viewing_id
         );
         assert!(!identity.viewing_id.contains('~'));
-        assert!(identity.viewing_id.starts_with("view-this-is-my-last-note-"));
+        assert!(identity
+            .viewing_id
+            .starts_with("view-this-is-my-last-note-"));
     }
 
     #[test]
