@@ -1,6 +1,7 @@
-use crate::commands::{notes, settings, sticked_notes};
+use crate::commands::{note_lock, notes, settings, sticked_notes};
 use crate::state::{AppState, LastSavedNote};
 use sticked_notes::StickedNote;
+use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
 const SETTINGS_WINDOW_WIDTH: f64 = 860.0;
@@ -10,6 +11,12 @@ const SETTINGS_WINDOW_MIN_HEIGHT: f64 = 560.0;
 
 /// Minimum overlap (in physical pixels) between window and monitor for the position to be usable.
 const MIN_OVERLAP: f64 = 80.0;
+const MAX_VIEWING_SLUG_LEN: usize = 48;
+
+struct ViewingWindowIdentity {
+    display_title: String,
+    viewing_id: String,
+}
 
 /// Check if a window at (x, y) with the given size overlaps sufficiently with any connected
 /// monitor. All coordinates are in **physical pixels** (same space as `outerPosition()`).
@@ -58,6 +65,124 @@ fn remember_last_note(state: &AppState, path: &str, folder: &str) {
         path: path.to_string(),
         folder: folder.to_string(),
     });
+}
+
+fn is_break_placeholder_line(line: &str) -> bool {
+    line.eq_ignore_ascii_case("<br>")
+        || line.eq_ignore_ascii_case("<br/>")
+        || line.eq_ignore_ascii_case("<br />")
+}
+
+fn normalize_display_title(line: &str) -> String {
+    let trimmed = line.trim();
+    let without_heading = trimmed.trim_start_matches('#').trim();
+    without_heading
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn filename_title_from_path(path: &str) -> String {
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled");
+
+    let parts: Vec<&str> = stem.split('-').collect();
+    let raw_title = if parts.len() > 3 {
+        parts[2..parts.len() - 1].join(" ")
+    } else {
+        stem.replace('-', " ")
+    };
+
+    let title = raw_title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if title.is_empty() {
+        "Untitled".to_string()
+    } else {
+        title.chars().take(120).collect()
+    }
+}
+
+fn extract_display_title(content: &str, path: &str) -> String {
+    if note_lock::is_locked_content(content) {
+        return filename_title_from_path(path);
+    }
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_break_placeholder_line(trimmed) {
+            continue;
+        }
+
+        let normalized = normalize_display_title(trimmed);
+        if !normalized.is_empty() {
+            return normalized.chars().take(120).collect();
+        }
+    }
+
+    filename_title_from_path(path)
+}
+
+fn sanitize_label_slug(title: &str) -> String {
+    let mut slug = String::with_capacity(title.len().min(MAX_VIEWING_SLUG_LEN));
+    let mut last_was_separator = false;
+
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if slug.len() >= MAX_VIEWING_SLUG_LEN {
+                break;
+            }
+            slug.push(ch.to_ascii_lowercase());
+            last_was_separator = false;
+            continue;
+        }
+
+        if slug.is_empty() || last_was_separator {
+            continue;
+        }
+
+        if slug.len() >= MAX_VIEWING_SLUG_LEN {
+            break;
+        }
+        slug.push('-');
+        last_was_separator = true;
+    }
+
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "untitled".to_string()
+    } else {
+        slug
+    }
+}
+
+fn stable_path_hash(path: &str) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in path.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    let full = format!("{hash:016x}");
+    full[..12].to_string()
+}
+
+fn derive_viewing_window_identity(content: &str, path: &str) -> ViewingWindowIdentity {
+    let display_title = extract_display_title(content, path);
+    let title_slug = sanitize_label_slug(&display_title);
+    let path_hash = stable_path_hash(path);
+
+    ViewingWindowIdentity {
+        display_title,
+        viewing_id: format!("view-{}-{}", title_slug, path_hash),
+    }
 }
 
 pub fn show_postit_with_folder(app: &AppHandle, folder: &str) {
@@ -416,8 +541,8 @@ pub async fn open_note_for_viewing(
         remember_last_note(&state, &path, &folder);
     }
 
-    let id = format!("view-{}", path.replace(['/', '\\', '.', ' '], "-"));
-    let window_label = format!("sticked-{}", id);
+    let identity = derive_viewing_window_identity(&content, &path);
+    let window_label = format!("sticked-{}", identity.viewing_id);
 
     if app.get_webview_window(&window_label).is_some() {
         return Ok(true);
@@ -427,9 +552,9 @@ pub async fn open_note_for_viewing(
         let state = app.state::<AppState>();
         let mut viewing_notes = state.viewing_notes.lock().unwrap_or_else(|e| e.into_inner());
         viewing_notes.insert(
-            id.clone(),
+            identity.viewing_id.clone(),
             crate::state::ViewingNoteContent {
-                id: id.clone(),
+                id: identity.viewing_id.clone(),
                 content,
                 folder,
                 path: path.clone(),
@@ -437,7 +562,10 @@ pub async fn open_note_for_viewing(
         );
     }
 
-    let url = format!("index.html?window=sticked&id={}&viewing=true", id);
+    let url = format!(
+        "index.html?window=sticked&id={}&viewing=true",
+        identity.viewing_id
+    );
 
     let saved_settings = settings::load_settings_from_file().ok();
     let (width, height) = saved_settings
@@ -449,7 +577,7 @@ pub async fn open_note_for_viewing(
     // Build hidden — we position after creation using PhysicalPosition to avoid
     // the logical/physical mismatch in WebviewWindowBuilder::position().
     let builder = WebviewWindowBuilder::new(&app, &window_label, WebviewUrl::App(url.into()))
-        .title("View Note")
+        .title(identity.display_title.clone())
         .inner_size(width, height)
         .min_inner_size(320.0, 200.0)
         .max_inner_size(800.0, 600.0)
@@ -607,7 +735,10 @@ pub fn restore_sticked_notes(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{remember_last_note, SETTINGS_WINDOW_MIN_WIDTH, SETTINGS_WINDOW_WIDTH};
+    use super::{
+        derive_viewing_window_identity, remember_last_note, SETTINGS_WINDOW_MIN_WIDTH,
+        SETTINGS_WINDOW_WIDTH,
+    };
     use crate::state::AppState;
 
     #[test]
@@ -625,5 +756,72 @@ mod tests {
     fn settings_window_min_width_is_large_enough_for_full_menu_bar() {
         assert!(SETTINGS_WINDOW_MIN_WIDTH >= 760.0);
         assert!(SETTINGS_WINDOW_WIDTH > SETTINGS_WINDOW_MIN_WIDTH);
+    }
+
+    #[test]
+    fn viewing_identity_keeps_icloud_paths_tauri_safe() {
+        let identity = derive_viewing_window_identity(
+            "# This is my last note\n\nBody",
+            "/Users/test/Library/Mobile Documents/com~apple~CloudDocs/Stik/Inbox/20260423-084615-this-is-my-last-note-a1b2.md",
+        );
+
+        assert_eq!(identity.display_title, "This is my last note");
+        assert!(
+            identity
+                .viewing_id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'),
+            "viewing id should contain only Tauri-safe characters: {}",
+            identity.viewing_id
+        );
+        assert!(!identity.viewing_id.contains('~'));
+        assert!(identity.viewing_id.starts_with("view-this-is-my-last-note-"));
+    }
+
+    #[test]
+    fn viewing_identity_uses_hash_to_avoid_duplicate_title_collisions() {
+        let first = derive_viewing_window_identity(
+            "# Same Title",
+            "/Users/test/Documents/Stik/Inbox/20260423-084615-same-title-a1b2.md",
+        );
+        let second = derive_viewing_window_identity(
+            "# Same Title",
+            "/Users/test/Documents/Stik/Work/20260423-084700-same-title-c3d4.md",
+        );
+
+        assert_eq!(first.display_title, "Same Title");
+        assert_eq!(second.display_title, "Same Title");
+        assert_ne!(first.viewing_id, second.viewing_id);
+    }
+
+    #[test]
+    fn viewing_identity_is_stable_for_the_same_path() {
+        let path = "/Users/test/Documents/Stik/Inbox/20260423-084615-repeatable-a1b2.md";
+        let first = derive_viewing_window_identity("# Repeatable", path);
+        let second = derive_viewing_window_identity("# Repeatable", path);
+
+        assert_eq!(first.viewing_id, second.viewing_id);
+    }
+
+    #[test]
+    fn viewing_identity_keeps_unicode_title_readable_but_slug_safe() {
+        let identity = derive_viewing_window_identity(
+            "## Café (Project) / 東京\n\nBody",
+            "/Users/test/Documents/Stik/Inbox/20260423-084615-cafe-project-a1b2.md",
+        );
+
+        assert_eq!(identity.display_title, "Café (Project) / 東京");
+        assert!(identity.viewing_id.starts_with("view-caf-project-"));
+    }
+
+    #[test]
+    fn viewing_identity_falls_back_to_filename_for_locked_notes() {
+        let identity = derive_viewing_window_identity(
+            "---stik-locked---\nnonce: abc\ndata",
+            "/Users/test/Documents/Stik/Inbox/20260423-084615-my-secret-note-a1b2.md",
+        );
+
+        assert_eq!(identity.display_title, "my secret note");
+        assert!(identity.viewing_id.starts_with("view-my-secret-note-"));
     }
 }
