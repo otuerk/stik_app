@@ -147,7 +147,7 @@ export default function NoteList({
             key={result.path}
             onClick={() => onSelectResult(result)}
             onMouseEnter={() => onSetSelectedIndex(index)}
-            className={`w-full px-4 py-3 text-left border-b border-line/50 transition-colors ${
+            className={`w-full px-4 py-1.5 text-left border-b border-line/50 transition-colors ${
               isSelected ? "bg-coral/10" : "hover:bg-line/30"
             }`}
           >
@@ -169,21 +169,21 @@ export default function NoteList({
                 </svg>
               )}
               <p
-                className={`flex-1 text-[14px] font-medium leading-relaxed truncate ${
+                className={`flex-1 text-[14px] font-medium truncate ${
                   result.locked ? "text-stone italic" : "text-ink"
                 }`}
               >
                 {displayTitle}
               </p>
+              <span className="shrink-0 text-[10px] text-stone font-mono">
+                {formatRelativeDate(result.created)}
+              </span>
               <span
                 className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold ${color.badgeBg} ${color.badgeText}`}
               >
                 {result.folder}
               </span>
             </div>
-            <span className="text-[10px] text-stone font-mono">
-              {formatRelativeDate(result.created)}
-            </span>
             {shouldShowSnippet && !result.locked && (
               <p className="text-[12px] text-stone leading-relaxed mt-0.5">
                 {highlightSnippet(displaySnippet, query)}
@@ -219,26 +219,24 @@ export default function NoteList({
                 key={result.path}
                 onClick={() => onSelectResult(result)}
                 onMouseEnter={() => onSetSelectedIndex(globalIndex)}
-                className={`w-full px-4 py-3 text-left border-b border-line/50 transition-colors ${
+                className={`w-full px-4 py-1.5 text-left border-b border-line/50 transition-colors ${
                   isSelected ? "bg-coral/10" : "hover:bg-line/30"
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <p className="flex-1 text-[14px] font-medium text-ink leading-relaxed truncate">
+                  <p className="flex-1 text-[14px] font-medium text-ink truncate">
                     {displayTitle}
                   </p>
+                  <span className="shrink-0 text-[10px] text-stone font-mono">
+                    {formatRelativeDate(result.created)}
+                  </span>
+                  <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium bg-coral/10 text-coral">
+                    {Math.round(result.similarity * 100)}%
+                  </span>
                   <span
                     className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold ${color.badgeBg} ${color.badgeText}`}
                   >
                     {result.folder}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-stone font-mono">
-                    {formatRelativeDate(result.created)}
-                  </span>
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-coral/10 text-coral">
-                    {Math.round(result.similarity * 100)}% match
                   </span>
                 </div>
                 {shouldShowSnippet && (

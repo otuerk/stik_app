@@ -171,7 +171,7 @@ export default function CommandPalette() {
     invoke<NoteInfo[]>("list_notes", { folder: selectedFolder }).then(
       (notes) => {
         setRecentNotes(
-          notes.slice(0, 15).map((n) => ({
+          notes.map((n) => ({
             path: n.path,
             filename: n.filename,
             folder: n.folder,
@@ -305,7 +305,7 @@ export default function CommandPalette() {
     const notes = await invoke<NoteInfo[]>("list_notes", {
       folder: selectedFolder,
     });
-    const recent = notes.slice(0, 15).map((n) => ({
+    const recent = notes.map((n) => ({
       path: n.path,
       filename: n.filename,
       folder: n.folder,
