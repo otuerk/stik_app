@@ -9,3 +9,10 @@ export function normalizeMarkdownForCopy(markdown: string): string {
 export function isMarkdownEffectivelyEmpty(markdown: string): boolean {
   return normalizeMarkdownForCopy(markdown).trim().length === 0;
 }
+
+export function isMarkdownUnchanged(
+  current: string,
+  original: string,
+): boolean {
+  return normalizeMarkdownForCopy(current) === normalizeMarkdownForCopy(original);
+}

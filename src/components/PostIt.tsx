@@ -20,6 +20,7 @@ import {
 } from "@/extensions/cm-slash-commands";
 import {
   isMarkdownEffectivelyEmpty,
+  isMarkdownUnchanged,
   normalizeMarkdownForCopy,
 } from "@/utils/normalizeMarkdownForCopy";
 import { shouldSaveOnGlobalEscape } from "@/utils/captureEscape";
@@ -548,6 +549,18 @@ export default function PostIt({
       return;
     }
 
+    if (isMarkdownUnchanged(currentContent, initialContent)) {
+      flushSync(() => {
+        setContent("");
+        onContentChange?.("");
+        setShowPicker(false);
+      });
+      editorRef.current?.clear();
+      contentRef.current = "";
+      await onClose();
+      return;
+    }
+
     try {
       const targetFolder = await resolveFolderForAction();
 
@@ -582,6 +595,7 @@ export default function PostIt({
     onContentChange,
     resolveFolderForAction,
     getLiveContent,
+    initialContent,
   ]);
 
   const showToast = useCallback((message: string) => {
@@ -990,6 +1004,25 @@ export default function PostIt({
 
     const currentContent = getLiveContent();
 
+    // Skip save + animation when content hasn't changed. Still unpin if pinned.
+    if (
+      !isMarkdownEffectivelyEmpty(currentContent) &&
+      isMarkdownUnchanged(currentContent, initialContent)
+    ) {
+      try {
+        if (isPinned && currentStickedId) {
+          await invoke("close_sticked_note", {
+            id: currentStickedId,
+            saveToFolder: false,
+          });
+        }
+        await invoke("close_sticked_window", { id: idToClose });
+      } catch (error) {
+        console.error("Failed to close sticked note:", error);
+      }
+      return;
+    }
+
     // Only show save animation if there's content
     if (!isMarkdownEffectivelyEmpty(currentContent)) {
       setIsSaving(true);
@@ -1049,7 +1082,14 @@ export default function PostIt({
         console.error("Failed to close sticked note:", error);
       }
     }
-  }, [stickedId, currentStickedId, isPinned, folder, getLiveContent]);
+  }, [
+    stickedId,
+    currentStickedId,
+    isPinned,
+    folder,
+    getLiveContent,
+    initialContent,
+  ]);
 
   // Close without saving
   const handleCloseWithoutSaving = useCallback(async () => {
